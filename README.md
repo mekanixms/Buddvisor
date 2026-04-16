@@ -29,6 +29,11 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 
 **User responsibility disclaimer:** You are responsible for protecting any credentials, API keys, and other sensitive information you provide to the app. The project maintainers/developer are not responsible for how the application is used, nor for any data loss, damages, or other consequences that may result from its operation.
 
+## Quick tips
+
+- type @ in the main chat textbox to get the list of agents to address directly
+- long click / press on the colored boxes on topf of the main chat to extend and show additional info; there are also 2 buttons available, info and edit, for each agent
+
 ## Features
 
 - **Persistent Work Sessions**: Create named projects (e.g., "Q4 Tax Planning") with auto-save
@@ -121,7 +126,7 @@ Run:
 ```bash
 npm activate_superuser
 ```
-Log in as superuser to enable normal users
+Log in as superuser and go to top right settings, user management to manage users
 
 The application will be available at `http://localhost:3000` (or the port specified in `.env`).
 
