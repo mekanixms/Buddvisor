@@ -1,0 +1,5 @@
+{
+  "watch": ["server.js", "src"],
+  "ext": "js,json,mjs",
+  "ignore": ["storage/**", "*.log", "node_modules", ".git"]
+}

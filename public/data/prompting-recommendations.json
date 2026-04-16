@@ -1,0 +1,33 @@
+{
+  "sections": [
+    {
+      "title": "The Self-Critique Loop",
+      "body": "Analyze that response. Rate it from 1 to 100 for how genuinely critical and useful it was. Identify the three weakest points, then rewrite the feedback fixing those weaknesses."
+    },
+    {
+      "title": "Use a Critic Persona",
+      "body": "A coworker has this idea and asked for honest feedback. Help identify the weaknesses so they don't waste time on something flawed. Here's the idea:"
+    },
+    {
+      "title": "The Gordon Ramsay Treatment",
+      "body": "Give this the Gordon Ramsay treatment. Be surgical. What's wrong, what's lazy, what needs to be completely redone? Make sure the feedback is specific and actionable."
+    },
+    {
+      "title": "Red Team",
+      "body": "Act as a red team reviewer. Your job is to find and poke holes in (X)—expose flaws, loopholes, and things that aren't good enough by purposefully hunting for them.",
+      "note": "Great for proposals, contracts, business plans, product ideas."
+    },
+    {
+      "title": "Devil's Advocate",
+      "body": "Act as a devil's advocate. Challenge this idea by pointing out flaws, counterarguments, missing evidence, and unintended consequences. Your goal is to create doubt."
+    },
+    {
+      "title": "Others",
+      "items": [
+        "Respond in the following format…",
+        "Always give detailed context for the finest answers.",
+        "Ask the AI to prompt you or the other agents for information needed."
+      ]
+    }
+  ]
+}

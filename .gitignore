@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+yarn.lock
+
+.env
+.env.*
+!.env.example
+storage/*
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+scripts/
+.claude/*
+.cursor/
+.vscode/
+.TODOs
+ef-API.md
+CLAUDE.md
+DEPLOYMENT_TODOS.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage/
+
+# Build files
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+
+*.traineddata
