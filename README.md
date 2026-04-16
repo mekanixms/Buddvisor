@@ -106,6 +106,35 @@ npm run migrate
    - **Audio/video transcription**: requires `OPENAI_API_KEY` (Whisper).
    - **PDF timeouts**: if large PDFs report timeouts, set `PDF_PARSE_TIMEOUT_MS` (default 90s), `PDFTOPPM_TIMEOUT_MS` (default 2 min), and/or `PDF_VISION_TIMEOUT_MS` (default 5 min total for all page vision calls) in `.env`.
 
+## Docker (Docker Compose)
+
+1. Install Docker and the Docker Compose plugin.
+2. Create your environment file:
+   ```bash
+   cp .env.example .env
+   ```
+
+   Note: **do not commit** `.env` to GitHub. Keep all secrets only in your local `.env`.
+
+3. Start BudVisor:
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. Open the app in your browser at: `http://localhost:3000`
+
+5. First-time superuser activation (recommended workflow)
+   - Register an account in the frontend using the exact username from `SUPERUSER_NAME` (new users are created inactive by default).
+   - Activate it inside the running container:
+     ```bash
+     docker compose exec budvisor npm activate_superuser
+     ```
+   - Log in as that user.
+
+Data persistence:
+- SQLite database + uploaded documents/embeddings are stored in the Docker volume `budvisor-storage`.
+- To reset all stored data: `docker compose down -v`.
+
 ## Usage
 
 ### Development Mode

@@ -1,0 +1,19 @@
+services:
+  budvisor:
+    build: .
+    container_name: budvisor
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    volumes:
+      # Persist SQLite database + uploaded documents/embeddings
+      - budvisor-storage:/app/storage
+      # Load secrets (JWT_SECRET, ENCRYPTION_KEY, provider keys, SUPERUSER_NAME, etc.)
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+
+volumes:
+  budvisor-storage:
+
