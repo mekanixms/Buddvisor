@@ -108,12 +108,20 @@ npm run migrate
 ```bash
 npm run dev
 ```
+or
 
 ### Production Mode
 
 ```bash
 npm start
 ```
+
+Register in the frontend that exact username as `SUPERUSER_NAME` as set in .env (it will be created inactive)
+Run:
+```bash
+npm activate_superuser
+```
+Log in as superuser to enable normal users
 
 The application will be available at `http://localhost:3000` (or the port specified in `.env`).
 
@@ -933,11 +941,21 @@ The application supports a superuser role for administrative tasks. The superuse
 1. Add to your `.env` file:
    ```env
    SUPERUSER_NAME=admin
-````
+```
 
 Replace `admin` with your desired superuser username.
 
-2. The user with this username will automatically have superuser privileges.
+2. Register a user account in the frontend using the exact username from `SUPERUSER_NAME`.
+
+   Note: newly registered accounts are created inactive by default and cannot log in until they are activated.
+
+3. Activate the account:
+
+   ```bash
+   npm activate_superuser
+   ```
+
+After activation, the configured `SUPERUSER_NAME` user will have superuser privileges.
 
 ### Superuser Features
 

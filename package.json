@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "migrate": "node src/db/migrate.js",
     "seed": "node src/db/seed.js",
+    "activate_superuser": "node src/db/activateSuperuser.js",
     "test": "jest",
     "install-local": "npm install && npm run migrate"
   },
