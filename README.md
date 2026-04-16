@@ -16,6 +16,7 @@ Key capabilities include:
 
 Clone the repo and install dependencies (see **Installation**). Access the app in your browser at the IP address and port you configured (for a better experince make sure you have access over SSH or a terminal to the computer running the app).
 Save changes after configuring each section below.
+
 - Define a few agents.
 - Create a session, select it, then open **Configure session** (gear icon).
 - Configure the **Orchestrator** provider/model.
@@ -26,7 +27,7 @@ Save changes after configuring each section below.
 
 Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off by default—enable it in the chat view or in session configuration.
 
-
+**User responsibility disclaimer:** You are responsible for protecting any credentials, API keys, and other sensitive information you provide to the app. The project maintainers/developer are not responsible for how the application is used, nor for any data loss, damages, or other consequences that may result from its operation.
 
 ## Features
 
@@ -63,12 +64,14 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 ## Installation
 
 1. Clone the repository:
+
 ```bash
 git clone <repository-url>
 cd BudVisor
 ```
 
 2. Copy the example environment file:
+
 ```bash
 cp .env.example .env
 ```
@@ -81,11 +84,13 @@ cp .env.example .env
    - Configure SMTP settings for email tool (optional)
 
 4. Install dependencies:
+
 ```bash
 npm install
 ```
 
 5. Run database migrations:
+
 ```bash
 npm run migrate
 ```
@@ -99,11 +104,13 @@ npm run migrate
 ## Usage
 
 ### Development Mode
+
 ```bash
 npm run dev
 ```
 
 ### Production Mode
+
 ```bash
 npm start
 ```
@@ -144,6 +151,7 @@ BudVisor/
 ## API Documentation
 
 ### Authentication
+
 - `POST /api/auth/register` - Register new user
 - `POST /api/auth/login` - Login and get JWT
 - `POST /api/auth/logout` - Invalidate JWT
@@ -152,6 +160,7 @@ BudVisor/
 - `GET /api/auth/sessions` - Get active sessions for current user
 
 ### User Management (Superuser Only)
+
 - `GET /api/auth/users` - List all users
 - `DELETE /api/auth/users/:id` - Delete a user
 - `PUT /api/auth/users/:id/reset-password` - Reset a user's password
@@ -196,24 +205,27 @@ This uses the existing authenticated endpoint and works immediately.
 { "message": "Your message here" }
 ```
 
-   **Context-only mode (no agent processing):**
-   - Add `"context": true` to the body to add the message to conversation history without processing through agents (saves tokens):
-   
+**Context-only mode (no agent processing):**
+
+- Add `"context": true` to the body to add the message to conversation history without processing through agents (saves tokens):
+
 ```json
 { "message": "sensor data", "context": true }
 ```
 
-   **Posting on behalf of another user (alias):**
-   - When using context-only mode, you can post on behalf of another user by including the `alias` key with the user ID:
-   
+**Posting on behalf of another user (alias):**
+
+- When using context-only mode, you can post on behalf of another user by including the `alias` key with the user ID:
+
 ```json
 { "message": "sensor data", "context": true, "alias": 4 }
 ```
 
-   **Requirements for alias posting:**
-   - The alias user must exist and be activated
-   - The logged-in user (JWT owner) must own the session
-   - Only works with context-only mode (`context: true`)
+**Requirements for alias posting:**
+
+- The alias user must exist and be activated
+- The logged-in user (JWT owner) must own the session
+- Only works with context-only mode (`context: true`)
 
 #### Option B (planned): Call a shared-secret webhook (no JWT)
 
@@ -226,6 +238,7 @@ This is the intended integration for inbound webhooks (e.g. n8n) where the calle
   - `work_sessions.inbound_webhook_secret_hash`
 
 Recommended n8n node settings:
+
 - **Method**: `POST`
 - **URL**: `http://<host>:3000/api/webhooks/n8n`
 - **Headers**:
@@ -247,6 +260,7 @@ Recommended n8n node settings:
 ```
 
 ### Work Sessions
+
 - `GET /api/sessions` - List user's sessions
 - `POST /api/sessions` - Create new session
 - `GET /api/sessions/:id` - Get session details
@@ -254,6 +268,7 @@ Recommended n8n node settings:
 - `DELETE /api/sessions/:id` - Delete session
 
 ### Chat
+
 - `POST /api/chat/:sessionId` - Send message to main agent
   - Body: `{ "message": "..." }`
   - Context-only: `{ "message": "...", "context": true }` - Adds to history without agent processing
@@ -261,6 +276,7 @@ Recommended n8n node settings:
 - `POST /api/chat/:sessionId/stream` - Stream response (SSE)
 
 ### Agents
+
 - `GET /api/agents` - List user's agents
 - `POST /api/agents` - Create agent
 - `GET /api/agents/:id` - Get agent details
@@ -268,12 +284,14 @@ Recommended n8n node settings:
 - `DELETE /api/agents/:id` - Delete agent
 
 ### Documents
+
 - `GET /api/documents` - List user's documents
 - `POST /api/documents` - Upload document
 - `GET /api/documents/:id` - Get document metadata
 - `DELETE /api/documents/:id` - Delete document
 
 ### Tasks
+
 - `GET /api/tasks` - List tasks
 - `POST /api/tasks` - Submit new task
 - `GET /api/tasks/:id` - Get task details
@@ -328,6 +346,7 @@ ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_wor
 ### MCP Tools
 
 Configure in `.env`:
+
 - **File System**: Sandboxed operations in user directories
 - **Web Search**: Requires search API key (optional)
 - **Email**: Requires SMTP configuration
@@ -337,13 +356,14 @@ Configure in `.env`:
 Agents can call remote webhook endpoints (e.g. your n8n instance) using the built-in tool **`webhook_request`**.
 
 **Parameters:**
-- **`url`** *(required)*: absolute `http(s)` URL
-- **`method`** *(optional)*: `GET|POST|PUT|PATCH|DELETE` (default: `POST`)
-- **`headers`** *(optional)*: object of header key/value pairs
-- **`query`** *(optional)*: object appended as query params
-- **`body`** *(optional)*: JSON body for `POST/PUT/PATCH`
-- **`timeout_ms`** *(optional)*: request timeout (default: `30000`)
-- **`max_response_chars`** *(optional)*: truncates large responses (default: `20000`)
+
+- **`url`** _(required)_: absolute `http(s)` URL
+- **`method`** _(optional)_: `GET|POST|PUT|PATCH|DELETE` (default: `POST`)
+- **`headers`** _(optional)_: object of header key/value pairs
+- **`query`** _(optional)_: object appended as query params
+- **`body`** _(optional)_: JSON body for `POST/PUT/PATCH`
+- **`timeout_ms`** _(optional)_: request timeout (default: `30000`)
+- **`max_response_chars`** _(optional)_: truncates large responses (default: `20000`)
 
 **Recommended safety setting (restrict outbound destinations):**
 
@@ -364,12 +384,14 @@ WEBHOOK_REQUEST_ALLOWLIST=http://192.168.88.50:5678/webhook/,https://n8n.mycompa
 `process the file Screenshot from 2026-01-11 13-48-58.png using process_media`
 
 **What it returns:**
+
 - **Images**: description + extracted text (vision-based)
 - **Audio**: transcript
 - **Video**: transcript + sampled frame descriptions
 - **PDF**: extracted text (pdf-parse) + vision description of each page (when Poppler is installed)
 
 **Requirements:**
+
 - **Ollama vision models (e.g. `qwen3-vl`)**: supported for image/frame understanding when the agent provider is `ollama` and the model is a VL/vision model.
   - Set `OLLAMA_BASE_URL` (or configure the agent provider base URL).
   - Ensure the model is pulled and runnable by Ollama.
@@ -382,6 +404,7 @@ WEBHOOK_REQUEST_ALLOWLIST=http://192.168.88.50:5678/webhook/,https://n8n.mycompa
 Agents can interact with a local SQLite database assigned per agent using the built-in tool **`sqlite_local_db`**. Each agent gets an isolated database file stored in `storage/agents-dbs/`.
 
 **Configuration:**
+
 - In **Configure Session → Tools**, assign `sqlite_local_db` to agents
 - Instead of a checkbox, you'll see a text input field
 - Enter a database name (e.g., "customer_data", "inventory") to enable the tool for that agent
@@ -389,6 +412,7 @@ Agents can interact with a local SQLite database assigned per agent using the bu
 - Each agent's database is isolated and stored with a unique filename based on session ID, agent ID, and database name
 
 **Operations:**
+
 - **`create_table`**: Create tables with custom schemas
   - Parameters: `table_name`, `schema` (e.g., "id INTEGER PRIMARY KEY, name TEXT NOT NULL")
 - **`list_tables`**: List all tables in the database
@@ -410,6 +434,7 @@ Agents can interact with a local SQLite database assigned per agent using the bu
   - Parameters: `table_name`
 
 **Example usage:**
+
 ```
 Create a table for storing customer information:
 - operation: create_table
@@ -429,11 +454,13 @@ Query customers:
 ```
 
 **Database location:**
+
 - Database files are stored in `storage/agents-dbs/`
 - Each database file has a unique name combining the user-provided name with a hash of session ID, agent ID, and database name
 - Databases persist across sessions and can be accessed by the same agent in the same session
 
 **Security:**
+
 - Input sanitization prevents SQL injection
 - Each agent has isolated database access
 - DELETE operations require a WHERE clause to prevent accidental data loss
@@ -444,6 +471,7 @@ Query customers:
 Agents can manage files and directories in an isolated working folder assigned per agent per session using the built-in tool **`local_working_folder`**. Each agent gets a unique workspace directory stored in `storage/agents-workspaces/`.
 
 **Configuration:**
+
 - In **Configure Session → Tools**, assign `local_working_folder` to agents
 - Instead of a checkbox, you'll see a text input field
 - Enter a folder name (e.g., "data_analysis", "scripts") to enable the tool for that agent
@@ -451,6 +479,7 @@ Agents can manage files and directories in an isolated working folder assigned p
 - Each agent's workspace is isolated and stored with a unique directory name based on session ID, agent ID, and folder name
 
 **Operations:**
+
 - **`create_file`**: Create files with content
   - Parameters: `path` (relative to workspace), `content` (string), `overwrite` (optional, default: false), `mode` (optional, default: "644")
   - Example: `{operation: "create_file", path: "./data/temps.csv", content: "timestamp,temp\n2024-01-01,25.5"}`
@@ -475,6 +504,7 @@ Agents can manage files and directories in an isolated working folder assigned p
   - Returns: exists, is_file, is_directory, size, mode, modified_time
 
 **Example usage:**
+
 ```
 Create a CSV file:
 - operation: create_file
@@ -493,11 +523,13 @@ Read a file:
 ```
 
 **Workspace location:**
+
 - Workspace directories are stored in `storage/agents-workspaces/`
 - Each workspace has a unique name combining the user-provided folder name with a hash of session ID, agent ID, and folder name
 - Workspaces persist across sessions and can be accessed by the same agent in the same session
 
 **Security:**
+
 - Path validation prevents directory traversal (all paths must stay within workspace)
 - Relative paths are normalized and validated against workspace root
 - No access to files outside the assigned workspace
@@ -507,18 +539,21 @@ Read a file:
 Agents can execute shell commands within their assigned working folder using the built-in tool **`workspace_exec`**. This tool provides command execution capabilities with security constraints and resource limits.
 
 **Requirements:**
+
 - **`local_working_folder` must be configured first**: The agent must have `local_working_folder` assigned with a folder name before using `workspace_exec`
 - In **Configure Session → Tools**, assign `workspace_exec` to agents via checkbox
 
 **Parameters:**
-- **`command`** *(required)*: Shell command to execute (e.g., "python3 script.py", "ls -la ./data/")
-- **`cwd`** *(optional)*: Relative path within workspace (default: `./`)
-- **`env`** *(optional)*: Custom environment variables (object with string keys/values, e.g., `{"PYTHONPATH": "./lib/"}`)
-- **`timeout_ms`** *(optional)*: Execution timeout in milliseconds (default: 30000, min: 1000, max: 120000)
-- **`capture_output`** *(optional)*: Whether to capture stdout/stderr (default: true)
-- **`shell`** *(optional)*: Shell to use (defaults to system shell: bash on Linux/Mac, cmd.exe on Windows)
+
+- **`command`** _(required)_: Shell command to execute (e.g., "python3 script.py", "ls -la ./data/")
+- **`cwd`** _(optional)_: Relative path within workspace (default: `./`)
+- **`env`** _(optional)_: Custom environment variables (object with string keys/values, e.g., `{"PYTHONPATH": "./lib/"}`)
+- **`timeout_ms`** _(optional)_: Execution timeout in milliseconds (default: 30000, min: 1000, max: 120000)
+- **`capture_output`** _(optional)_: Whether to capture stdout/stderr (default: true)
+- **`shell`** _(optional)_: Shell to use (defaults to system shell: bash on Linux/Mac, cmd.exe on Windows)
 
 **Return value:**
+
 ```javascript
 {
   success: boolean,
@@ -533,6 +568,7 @@ Agents can execute shell commands within their assigned working folder using the
 ```
 
 **Security measures:**
+
 - Command validation against dangerous patterns (e.g., `rm -rf /`, `sudo`, network commands)
 - Whitelist of allowed commands (python, node, git, tar, ls, cat, etc.)
 - Path validation prevents escaping workspace
@@ -541,6 +577,7 @@ Agents can execute shell commands within their assigned working folder using the
 - Automatic logging to `./logs/exec_history.log` in workspace
 
 **Example usage:**
+
 ```
 Run a Python script:
 - command: python3 -c "import pandas as pd; df = pd.read_csv('./data/temps.csv'); print(df['temp'].mean())"
@@ -555,12 +592,14 @@ Run script with custom environment:
 ```
 
 **Use cases:**
+
 - Data processing: Run Python scripts to analyze CSV files
 - Script automation: Execute scripts created via `local_working_folder`
 - File operations: Use `tar`, `git`, or other command-line tools
 - Testing/iteration: Quick command execution for testing
 
 **Logging:**
+
 - All commands are automatically logged to `./logs/exec_history.log` in the workspace
 - Logs include timestamp, command, exit code, duration, and output snippets
 
@@ -569,10 +608,12 @@ Run script with custom environment:
 Agents can store and retrieve session-specific variables in fast in-memory storage using the built-in tool **`state_persist`**. This provides low-latency access without file I/O or database queries.
 
 **Configuration:**
+
 - In **Configure Session → Tools**, assign `state_persist` to agents via checkbox
 - No additional configuration needed
 
 **Operations:**
+
 - **`set`**: Store a value with optional expiration
   - Parameters: `key` (string), `value` (string/number/boolean/object), `ttl_ms` (optional, time-to-live in milliseconds)
   - Example: `{operation: "set", key: "session_start_time", value: "2026-01-25 08:00:00"}`
@@ -588,20 +629,24 @@ Agents can store and retrieve session-specific variables in fast in-memory stora
   - Returns: number of cleared keys
 
 **Data types supported:**
+
 - Strings, numbers, booleans
 - JSON objects (automatically parsed if string looks like JSON)
 
 **Limits:**
+
 - Max 100 keys per session
 - Max 10KB total size per session
 - Max 1KB per value
 
 **TTL (Time-To-Live) support:**
+
 - Optional expiration time for keys (range: 1 second to 7 days)
 - Automatic cleanup of expired keys every 5 minutes
 - Expired keys are automatically removed on get operations
 
 **Example usage:**
+
 ```
 Set a session variable:
 - operation: set
@@ -627,12 +672,14 @@ Delete a key:
 ```
 
 **Use cases:**
+
 - Session variables: `session_start_time`, `current_step`
 - Counters: `update_count`, `iteration_number`
 - Configuration: `temp_threshold`, `processing_mode`
 - Transient state: `last_result`, `current_batch_id`
 
 **Implementation details:**
+
 - Data is isolated per session-agent pair (`sessionId:agentId`)
 - In-memory storage using Map structure for fast access
 - Background cleanup interval runs every 5 minutes
@@ -644,11 +691,13 @@ Delete a key:
 Agents can read archived chat history from their session with advanced filtering, chunked responses, and export capabilities using the built-in tool **`archived_conversation_history`**. This tool allows agents to review past conversations, summarize long discussions, or check what users asked.
 
 **Configuration:**
+
 - In **Configure Session → Tools**, assign `archived_conversation_history` to agents via checkbox
 - No additional configuration needed
 - Works immediately when assigned
 
 **Core operations:**
+
 - **Read messages**: Retrieve messages with pagination (from/to indices)
 - **Filter by role**: Get only user or assistant messages
 - **Filter by date**: Get messages from specific date ranges
@@ -657,26 +706,29 @@ Agents can read archived chat history from their session with advanced filtering
 - **Export options**: Export as JSON/CSV string or save to file
 
 **Parameters:**
-- **`from`** *(optional, default: 0)*: Starting index (0-based) of messages to retrieve
-- **`to`** *(optional)*: Ending index (exclusive, 0-based). If omitted, uses default limit or auto-chunks
-- **`orderedAsc`** *(optional, default: true)*: Order messages chronologically (true) or reverse-chronologically (false)
-- **`role`** *(optional)*: Filter by message role - "user" or "assistant"
-- **`date_from`** *(optional)*: Filter messages from this date onwards (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)
-- **`date_to`** *(optional)*: Filter messages up to this date (ISO format)
-- **`keywords`** *(optional)*: Filter messages containing keywords (array or string, case-insensitive, all keywords must match)
-- **`chunk_size`** *(optional, default: 100)*: Size of each chunk when retrieving large histories (10-100 messages)
-- **`auto_chunk`** *(optional, default: true)*: Automatically chunk large requests to prevent timeouts
-- **`format`** *(optional)*: Export format - "json" or "csv" to return formatted string
-- **`export_to_file`** *(optional)*: Export to file in agent's working folder (requires `local_working_folder` to be configured)
+
+- **`from`** _(optional, default: 0)_: Starting index (0-based) of messages to retrieve
+- **`to`** _(optional)_: Ending index (exclusive, 0-based). If omitted, uses default limit or auto-chunks
+- **`orderedAsc`** _(optional, default: true)_: Order messages chronologically (true) or reverse-chronologically (false)
+- **`role`** _(optional)_: Filter by message role - "user" or "assistant"
+- **`date_from`** _(optional)_: Filter messages from this date onwards (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)
+- **`date_to`** _(optional)_: Filter messages up to this date (ISO format)
+- **`keywords`** _(optional)_: Filter messages containing keywords (array or string, case-insensitive, all keywords must match)
+- **`chunk_size`** _(optional, default: 100)_: Size of each chunk when retrieving large histories (10-100 messages)
+- **`auto_chunk`** _(optional, default: true)_: Automatically chunk large requests to prevent timeouts
+- **`format`** _(optional)_: Export format - "json" or "csv" to return formatted string
+- **`export_to_file`** _(optional)_: Export to file in agent's working folder (requires `local_working_folder` to be configured)
 
 **Chunked responses:**
 For super-long histories (thousands of messages), the tool automatically breaks responses into bite-sized chunks (default 100 messages per chunk) to prevent timeouts and overloads. Each chunked response includes:
+
 - Current chunk number and total chunks
 - Number of messages in current chunk
 - Remaining messages count
 - Suggestion for fetching the next chunk
 
 **Export functionality:**
+
 - **Format as string**: Use `format: "json"` or `format: "csv"` to get formatted data in the `exported_data` field
 - **Export to file**: Use `export_to_file` with a relative path (e.g., "exports/history.json", "./data/conversation.csv")
 - **File export requirements**: Requires `local_working_folder` tool to be configured first
@@ -684,6 +736,7 @@ For super-long histories (thousands of messages), the tool automatically breaks 
 - **Auto-format**: If `format` is not specified with `export_to_file`, defaults to JSON
 
 **Example usage:**
+
 ```
 Get first 10 messages:
 - from: 0
@@ -721,6 +774,7 @@ Get all messages (auto-chunked):
 ```
 
 **Response format:**
+
 ```javascript
 {
   success: true,
@@ -760,6 +814,7 @@ Get all messages (auto-chunked):
 ```
 
 **Use cases:**
+
 - **Summarize conversations**: Read all messages and provide a summary
 - **Check user requests**: Search for specific keywords or topics mentioned by users
 - **Review history**: Get messages from specific date ranges for context
@@ -767,12 +822,14 @@ Get all messages (auto-chunked):
 - **Context understanding**: Review past interactions before responding to current questions
 
 **Security:**
+
 - Path validation ensures file exports stay within agent's working folder
 - Maximum 100 messages per request prevents overloads
 - Parameterized SQL queries prevent SQL injection
 - File path validation prevents directory traversal attacks
 
 **Location:**
+
 - Tool handler: `src/services/tools/conversationHistoryTool.js`
 - Messages stored in `messages` table in SQLite database
 - Exported files saved in agent's workspace: `storage/agents-workspaces/`
@@ -782,13 +839,15 @@ Get all messages (auto-chunked):
 Agents can create interactive HTML/JavaScript content that renders as sandboxed iframes in the chat interface. This enables agents to create visualizations, charts, interactive calculators, diagrams, and other dynamic content.
 
 **How it works:**
+
 - Agents output code blocks with ` ```html ` or ` ```iframe ` language tags
 - The system automatically detects and renders these as interactive iframes
 - Content runs in a sandboxed iframe for security
 - Users can reload, toggle height, and view source code
 
 **Format:**
-```
+
+````
 ```html
 <!DOCTYPE html>
 <html>
@@ -802,7 +861,8 @@ Agents can create interactive HTML/JavaScript content that renders as sandboxed 
   </script>
 </body>
 </html>
-```
+````
+
 ```
 
 **Use cases:**
@@ -818,26 +878,28 @@ Agents can create interactive HTML/JavaScript content that renders as sandboxed 
 When creating or editing an agent, add this to the "Initial Context" field:
 
 ```
+
 You have the ability to create interactive HTML/JavaScript artifacts that will be rendered in the chat interface. When you need to create visualizations, charts, graphs, interactive demos, or any visual content, use the following format:
 
 ```html
 <!DOCTYPE html>
 <html>
-<head>
-  <!-- Include any CSS or external libraries here -->
-</head>
-<body>
-  <!-- Your HTML content here -->
-  <script>
-    // Your JavaScript code here
-  </script>
-</body>
+  <head>
+    <!-- Include any CSS or external libraries here -->
+  </head>
+  <body>
+    <!-- Your HTML content here -->
+    <script>
+      // Your JavaScript code here
+    </script>
+  </body>
 </html>
 ```
 
-The code block must start with ```html or ```iframe. The system will automatically render this as an interactive iframe that users can interact with.
+The code block must start with `html or `iframe. The system will automatically render this as an interactive iframe that users can interact with.
 
 Examples of what you can create:
+
 - Data visualizations (charts, graphs, dashboards)
 - Interactive calculators or tools
 - Diagrams or flowcharts
@@ -845,14 +907,17 @@ Examples of what you can create:
 - Any HTML/JS content that helps illustrate your response
 
 When appropriate, use this feature to make your responses more visual and interactive.
+
 ```
 
 **Option 2: Add to Session Orchestrator Context**
 In the "Orchestrator Initial Context" (Session Configuration → General tab), add:
 
 ```
-Agents in this session can create interactive HTML/JavaScript artifacts by outputting code blocks with ```html or ```iframe. These will be rendered as interactive iframes in the chat interface, allowing for visualizations, charts, interactive tools, and other dynamic content.
-```
+
+Agents in this session can create interactive HTML/JavaScript artifacts by outputting code blocks with `html or `iframe. These will be rendered as interactive iframes in the chat interface, allowing for visualizations, charts, interactive tools, and other dynamic content.
+
+````
 
 **Security:**
 - Artifacts run in sandboxed iframes with restricted permissions
@@ -868,8 +933,9 @@ The application supports a superuser role for administrative tasks. The superuse
 1. Add to your `.env` file:
    ```env
    SUPERUSER_NAME=admin
-   ```
-   Replace `admin` with your desired superuser username.
+````
+
+Replace `admin` with your desired superuser username.
 
 2. The user with this username will automatically have superuser privileges.
 
@@ -901,6 +967,7 @@ Superusers have access to a **User Management** tab in the Settings dialog where
 ## Development
 
 ### Running Tests
+
 ```bash
 npm test
 ```
@@ -908,12 +975,14 @@ npm test
 ### Database Migrations
 
 Create a new migration:
+
 ```bash
 # Manually create file in src/db/migrations/
 # Format: NNN_description.sql
 ```
 
 Run migrations:
+
 ```bash
 npm run migrate
 ```
@@ -930,6 +999,7 @@ npm run migrate
 ## Contributing
 
 Contributions are welcome! Please follow these guidelines:
+
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
