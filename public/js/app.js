@@ -684,6 +684,10 @@ document.addEventListener('click', (e) => {
       e.preventDefault();
       chatInterface.exportAsImage();
       break;
+    case 'export-html':
+      e.preventDefault();
+      chatInterface.exportAsHTML();
+      break;
     case 'show-bookmarks':
       e.preventDefault();
       chatInterface.showBookmarksModal();

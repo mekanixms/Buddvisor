@@ -163,16 +163,36 @@
                                 <span id="conversation-mode-badge" class="badge bg-info d-none">
                                     <i class="bi bi-chat-dots"></i> AI Brainstorming Enabled
                                 </span>
-                                <!-- Export as PDF Button -->
-                                <button id="export-pdf-btn" class="btn btn-sm btn-outline-primary d-none"
-                                        data-action="export-pdf" title="Export chat as PDF">
-                                    <i class="bi bi-file-earmark-pdf"></i> Export as PDF
-                                </button>
-                                <!-- Export as Image Button -->
-                                <button id="export-image-btn" class="btn btn-sm btn-outline-success d-none"
-                                        data-action="export-image" title="Export chat as image">
-                                    <i class="bi bi-image"></i> Export as Image
-                                </button>
+                                <!-- Export Dropdown -->
+                                <div class="dropdown">
+                                    <button
+                                        id="export-btn"
+                                        class="btn btn-sm btn-outline-primary dropdown-toggle d-none"
+                                        type="button"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        title="Export chat"
+                                    >
+                                        <i class="bi bi-download"></i> Export
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end">
+                                        <li>
+                                            <a class="dropdown-item" href="#" data-action="export-pdf">
+                                                <i class="bi bi-file-earmark-pdf me-2"></i> Export as PDF
+                                            </a>
+                                        </li>
+                                        <li>
+                                            <a class="dropdown-item" href="#" data-action="export-image">
+                                                <i class="bi bi-image me-2"></i> Export as Image
+                                            </a>
+                                        </li>
+                                        <li>
+                                            <a class="dropdown-item" href="#" data-action="export-html">
+                                                <i class="bi bi-filetype-html me-2"></i> Export as HTML
+                                            </a>
+                                        </li>
+                                    </ul>
+                                </div>
                                 <!-- Bookmarks Button -->
                                 <button id="bookmarks-btn" class="btn btn-sm btn-outline-warning d-none"
                                         data-action="show-bookmarks" title="View bookmarked messages">

@@ -516,23 +516,13 @@ class ChatInterface {
       }
     }
 
-    // Show Export PDF button when a session is active
-    const exportPdfBtn = document.getElementById('export-pdf-btn');
-    if (exportPdfBtn) {
+    // Show Export dropdown button when a session is active
+    const exportBtn = document.getElementById('export-btn');
+    if (exportBtn) {
       if (this.currentSession) {
-        exportPdfBtn.classList.remove('d-none');
+        exportBtn.classList.remove('d-none');
       } else {
-        exportPdfBtn.classList.add('d-none');
-      }
-    }
-
-    // Show Export Image button when a session is active
-    const exportImageBtn = document.getElementById('export-image-btn');
-    if (exportImageBtn) {
-      if (this.currentSession) {
-        exportImageBtn.classList.remove('d-none');
-      } else {
-        exportImageBtn.classList.add('d-none');
+        exportBtn.classList.add('d-none');
       }
     }
 
@@ -2214,6 +2204,134 @@ class ChatInterface {
       }
       showToast('Failed to export image: ' + (error.message || 'Unknown error'), 'danger');
     }
+  }
+
+  /**
+   * Export the rendered chat messages as a static HTML file (no JavaScript).
+   * The exported file contains only the content inside #chat-messages.
+   */
+  exportAsHTML() {
+    if (!this.currentSession) {
+      showToast('No active session to export', 'warning');
+      return;
+    }
+
+    const chatMessages = document.getElementById('chat-messages');
+    if (!chatMessages) {
+      showToast('Chat container not found', 'danger');
+      return;
+    }
+
+    if (this.messages.length === 0) {
+      showToast('No messages to export', 'warning');
+      return;
+    }
+
+    try {
+      const sessionName = this.currentSession.name || 'Chat Conversation';
+      const safeName = sessionName.replace(/[^a-z0-9]/gi, '_');
+      const fileName = `${safeName}_${new Date().toISOString().split('T')[0]}.html`;
+
+      // Clone the rendered DOM so we export formatting close to the UI.
+      const clone = chatMessages.cloneNode(true);
+
+      // Remove interactive UI controls / handlers artifacts.
+      clone.querySelectorAll(
+        'button,[data-action],.message-delete-btn,.message-copy-btn,.bookmark-btn,.artifact-reload-btn,.artifact-toggle-height-btn,.artifact-open-window-btn'
+      ).forEach((el) => el.remove());
+
+      // If there are iframes (artifacts), keep the iframe but strip sandboxed controls were removed above.
+      // Ensure we don't include any scripts in the export.
+      clone.querySelectorAll('script').forEach((el) => el.remove());
+
+      const exportDate = new Date().toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      // Minimal CSS to match in-app chat formatting closely.
+      // (We intentionally avoid JavaScript; CSS-only is allowed.)
+      const css = `
+:root { --primary-color: #0d6efd; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #fff; }
+.export-container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.export-header { margin-bottom: 16px; }
+.export-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
+.export-meta { color: #6c757d; font-size: 0.9rem; margin-top: 4px; }
+
+#chat-messages { background-color: #f8f9fa; border-radius: 0.375rem; padding: 1rem; }
+.chat-message { margin-bottom: 1rem; display: flex; flex-direction: column; align-items: flex-start; }
+.chat-message.user { align-items: flex-end; }
+.message-bubble { max-width: 70%; padding: 0.75rem 1rem; border-radius: 1rem; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
+.chat-message.user .message-bubble { background-color: var(--primary-color); color: #fff; border-bottom-right-radius: 0.25rem; }
+.chat-message.assistant .message-bubble { background-color: #fff; color: #212529; border-bottom-left-radius: 0.25rem; }
+.chat-message.assistant .message-bubble.task-message { background-color: #f5f5f5; border-left: 3px solid #dee2e6; }
+.chat-message.archived-message { opacity: 0.7; position: relative; }
+.chat-message.archived-message .message-bubble { border-left: 2px dashed #adb5bd; }
+.chat-message.archived-message.user .message-bubble { border-right: 2px dashed rgba(255, 255, 255, 0.5); }
+.archived-boundary { background-color: #e9ecef !important; border-color: #adb5bd !important; margin: 1rem 0; }
+.message-meta { font-size: 0.75rem; color: #6c757d; margin-top: 0.25rem; padding: 0 0.5rem; }
+.chat-message.user .message-meta { text-align: right; }
+
+/* Basic markdown-ish rendering */
+pre { background: #f1f3f5; border-radius: 0.375rem; padding: 0.75rem; overflow: auto; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 0.95em; }
+pre code { font-size: 0.9em; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #dee2e6; padding: 0.5rem; vertical-align: top; }
+blockquote { border-left: 4px solid #dee2e6; padding-left: 0.75rem; margin-left: 0; color: #495057; }
+a { color: #0d6efd; text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+      `.trim();
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${this.escapeHtmlText(sessionName)} - Export</title>
+  <style>${css}</style>
+</head>
+<body>
+  <div class="export-container">
+    <div class="export-header">
+      <h1 class="export-title">${this.escapeHtmlText(sessionName)}</h1>
+      <div class="export-meta">Exported: ${this.escapeHtmlText(exportDate)}</div>
+    </div>
+    ${clone.outerHTML}
+  </div>
+</body>
+</html>`;
+
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showToast('Chat exported as HTML successfully', 'success');
+    } catch (error) {
+      console.error('Error exporting HTML:', error);
+      showToast('Failed to export HTML: ' + (error.message || 'Unknown error'), 'danger');
+    }
+  }
+
+  escapeHtmlText(text) {
+    const s = String(text ?? '');
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   /**
