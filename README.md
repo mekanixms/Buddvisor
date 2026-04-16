@@ -33,6 +33,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 
 - type @ in the main chat textbox to get the list of agents to address directly
 - long click / press on the colored boxes on topf of the main chat to extend and show additional info; there are also 2 buttons available, info and edit, for each agent
+- If you get an error Too many requests, increase the value for RATE_LIMIT_MAX_REQUESTS in .env
 
 ## Features
 
