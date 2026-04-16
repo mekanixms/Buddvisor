@@ -143,6 +143,39 @@ function applyShareModeUI() {
 }
 
 /**
+ * Toggle the session selector sidebar and expand/collapse main content.
+ */
+function toggleSessionSidebar() {
+  // Share mode intentionally hides the sidebar and limits navigation.
+  if (window.isShareMode) return;
+
+  const sidebar = document.getElementById('session-sidebar');
+  const mainContent = document.getElementById('main-content-area');
+  if (!sidebar || !mainContent) return;
+
+  const willHide = !sidebar.classList.contains('d-none');
+
+  if (willHide) {
+    sidebar.classList.add('d-none');
+    mainContent.classList.remove('col-md-9');
+    mainContent.classList.add('col-12');
+  } else {
+    sidebar.classList.remove('d-none');
+    mainContent.classList.remove('col-12');
+    mainContent.classList.add('col-md-9');
+  }
+
+  const toggleBtn = document.getElementById('nav-toggle-sidebar');
+  if (toggleBtn) {
+    toggleBtn.title = willHide ? 'Show sidebar' : 'Hide sidebar';
+    const icon = toggleBtn.querySelector('i');
+    if (icon) {
+      icon.className = willHide ? 'bi bi-layout-sidebar-inset-reverse' : 'bi bi-layout-sidebar-inset';
+    }
+  }
+}
+
+/**
  * Logout user
  */
 async function logout() {
@@ -596,6 +629,10 @@ document.addEventListener('click', (e) => {
     case 'show-view':
       e.preventDefault();
       showView(target.dataset.view);
+      break;
+    case 'toggle-session-sidebar':
+      e.preventDefault();
+      toggleSessionSidebar();
       break;
 
     // User menu
