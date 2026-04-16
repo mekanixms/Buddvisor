@@ -1,6 +1,32 @@
-# BudVisor Multi-Agent tool
+# BudVisor
 
-A sophisticated multi-agent application for small business decision-making with persistent work sessions, document management, and adaptive task orchestration.
+BudVisor is a self-hosted, session-based multi-agent workspace for business planning and decision-making. Create work sessions, configure an orchestrator plus specialist agents, assign tools and documents per agent, and interact via chat or formal tasks.
+
+Key capabilities include:
+
+- **AI brainstorming mode**: optional “conversation mode” for structured team-style ideation.
+- **Work sessions**: session import/export and share links for collaboration.
+- **Custom agents**: local (Ollama) or cloud providers, assigned per session.
+- **Per-agent tools**: enable tools per agent (e.g. file workspace, SQLite, media processing).
+- **Document archive + embeddings**: upload documents and search/ground responses with local embeddings.
+- **Scheduled jobs**: run session tasks on a schedule.
+- **Webhooks**: let external systems post into a session.
+
+## Quick start
+
+Clone the repo and install dependencies (see **Installation**). Access the app in your browser at the IP address and port you configured (for a better experince make sure you have access over SSH or a terminal to the computer running the app).
+Save changes after configuring each section below.
+- Define a few agents.
+- Create a session, select it, then open **Configure session** (gear icon).
+- Configure the **Orchestrator** provider/model.
+- Assign **Agents** to the session.
+- Assign **Tools** per agent.
+- Set **Orchestrator Initial Context** (you can load the default prompt).
+- Set each agent’s initial prompt (comment button next to the agent).
+
+Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off by default—enable it in the chat view or in session configuration.
+
+
 
 ## Features
 
