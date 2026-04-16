@@ -88,6 +88,12 @@ cp .env.example .env
    - Configure LLM provider API keys (optional, can be set per agent)
    - Configure SMTP settings for email tool (optional)
 
+   **Generating `JWT_SECRET` and `ENCRYPTION_KEY`:** you can generate both values using Node.js:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+   Use the output as `JWT_SECRET`, and for `ENCRYPTION_KEY` (it will be > 32 characters).
+
 4. Install dependencies:
 
 ```bash
