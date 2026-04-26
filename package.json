@@ -1,7 +1,7 @@
 {
-  "name": "budvisor",
+  "name": "badvisor",
   "version": "1.0.0",
-  "description": "BudVisor Multi-agent application for small business decision-making with persistent work sessions",
+  "description": "Badvisor multi-agent application for small business decision-making with persistent work sessions",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

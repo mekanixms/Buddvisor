@@ -1,5 +1,5 @@
 /**
- * Built-in Tools for BudVisor
+ * Built-in Tools for Badvisor
  * Provides tax calculations, financial utilities, and business tools
  */
 

@@ -176,7 +176,7 @@ runMigrations().then(() => {
     schedulerService.start();
     logger.info('Scheduler service started');
 
-    console.log(`\n🚀 BudVisor Server`);
+    console.log(`\n🚀 Badvisor Server`);
     console.log(`📡 Server running on port ${PORT}`);
     console.log(`🌐 Open http://localhost:${PORT} in your browser\n`);
   });

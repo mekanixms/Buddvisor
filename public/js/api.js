@@ -1,5 +1,5 @@
 /**
- * API Client for BudVisor
+ * API Client for Badvisor
  *
  * This module provides a simple wrapper around the fetch API
  * for making requests to the backend.

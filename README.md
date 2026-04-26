@@ -1,6 +1,6 @@
-# BudVisor
+# Badvisor
 
-BudVisor is a self-hosted, session-based multi-agent workspace for business planning and decision-making. Create work sessions, configure an orchestrator plus specialist agents, assign tools and documents per agent, and interact via chat or formal tasks.
+Badvisor is a self-hosted, session-based multi-agent workspace for business planning and decision-making. Create work sessions, configure an orchestrator plus specialist agents, assign tools and documents per agent, and interact via chat or formal tasks.
 
 Key capabilities include:
 
@@ -73,7 +73,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 
 ```bash
 git clone <repository-url>
-cd BudVisor
+cd Badvisor
 ```
 
 2. Copy the example environment file:
@@ -123,7 +123,7 @@ npm run migrate
 
    Note: **do not commit** `.env` to GitHub. Keep all secrets only in your local `.env`.
 
-3. Start BudVisor:
+3. Start Badvisor:
    ```bash
    docker compose up -d --build
    ```
@@ -134,12 +134,12 @@ npm run migrate
    - Register an account in the frontend using the exact username from `SUPERUSER_NAME` (new users are created inactive by default).
    - Activate it inside the running container:
      ```bash
-     docker compose exec budvisor npm activate_superuser
+     docker compose exec badvisor npm activate_superuser
      ```
    - Log in as that user.
 
 Data persistence:
-- SQLite database + uploaded documents/embeddings are stored in the Docker volume `budvisor-storage`.
+- SQLite database + uploaded documents/embeddings are stored in the Docker volume `badvisor-storage`.
 - To reset all stored data: `docker compose down -v`.
 
 ## Usage
@@ -169,7 +169,7 @@ The application will be available at `http://localhost:3000` (or the port specif
 ## Project Structure
 
 ```
-BudVisor/
+Badvisor/
 ├── server.js                          # Express entry point
 ├── config/                            # Configuration files
 ├── src/
