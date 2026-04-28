@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Badvisor uses third-party open source software. Licenses and notices apply to those components.
+Buddvisor uses third-party open source software. Licenses and notices apply to those components.
 
 ## Frontend (loaded via CDN)
 

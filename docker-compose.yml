@@ -1,7 +1,7 @@
 services:
-  badvisor:
+  buddvisor:
     build: .
-    container_name: badvisor
+    container_name: buddvisor
     ports:
       - "3000:3000"
     environment:
@@ -9,11 +9,11 @@ services:
       PORT: 3000
     volumes:
       # Persist SQLite database + uploaded documents/embeddings
-      - badvisor-storage:/app/storage
+      - buddvisor-storage:/app/storage
       # Load secrets (JWT_SECRET, ENCRYPTION_KEY, provider keys, SUPERUSER_NAME, etc.)
       - ./.env:/app/.env:ro
     restart: unless-stopped
 
 volumes:
-  badvisor-storage:
+  buddvisor-storage:
 

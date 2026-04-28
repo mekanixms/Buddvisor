@@ -23,7 +23,7 @@ We will acknowledge receipt and work on a fix as quickly as practical.
 
 ## Security Notes (Operational)
 
-Badvisor includes functionality such as authentication, document upload/processing, and optional agent tools that can execute commands within a constrained workspace. If you deploy this on a network, treat it as an admin-grade application:
+Buddvisor includes functionality such as authentication, document upload/processing, and optional agent tools that can execute commands within a constrained workspace. If you deploy this on a network, treat it as an admin-grade application:
 
 - Run behind HTTPS and authentication
 - Do not expose it publicly without hardening (reverse proxy, firewall, rate limits)
