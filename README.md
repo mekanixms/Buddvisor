@@ -134,7 +134,7 @@ npm run migrate
    - Register an account in the frontend using the exact username from `SUPERUSER_NAME` (new users are created inactive by default).
    - Activate it inside the running container:
      ```bash
-    docker compose exec buddvisor npm activate_superuser
+     docker compose exec buddvisor npm run activate_superuser
      ```
    - Log in as that user.
 
@@ -160,7 +160,7 @@ npm start
 Register in the frontend that exact username as `SUPERUSER_NAME` as set in .env (it will be created inactive)
 Run:
 ```bash
-npm activate_superuser
+npm run activate_superuser
 ```
 Log in as superuser and go to top right settings, user management to manage users
 
