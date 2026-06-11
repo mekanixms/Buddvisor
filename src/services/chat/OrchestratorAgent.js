@@ -776,15 +776,380 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
   }
 
   /**
+   * Orchestrator-led mode: the orchestrator is the lead agent.
+   * It holds the full conversation history and delegates work to specialized
+   * agents via a delegate_to_agent tool with self-contained briefs.
+   * Specialized agents receive ONLY the brief (no conversation history).
+   */
+  static async processOrchestratorLed(params) {
+    const {
+      session,
+      agents,
+      context,
+      userMessage,
+      documentContext = '',
+      documentContextByAgentId = null,
+      processedMediaCacheByAgentId = null,
+      stream = false,
+      onChunk = null,
+    } = params;
+
+    const providerType = session.orchestrator_provider_type || 'claude';
+    const apiKey = this.getOrchestratorApiKey(session, providerType);
+
+    if (!apiKey) {
+      // Orchestrator-led mode requires a configured orchestrator; fall back to classic routing
+      logger.warn(`Orchestrator-led mode requested for session ${session.id} but no orchestrator API key is configured. Falling back to classic routing.`);
+      return await this.process(params);
+    }
+
+    await syncAssignedDocumentsToWorkspace(session.id, null);
+
+    const model = this.getOrchestratorModel(session, providerType);
+    const timeout = this.getOrchestratorTimeout(session);
+    const providerConfig = { apiKey, model, timeout };
+    if (providerType === 'ollama') {
+      providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
+        || process.env.OLLAMA_BASE_URL
+        || 'http://localhost:11434';
+    }
+    const provider = ProviderFactory.create(providerType, providerConfig);
+
+    // Orchestrator tools (assigned in Configure Session → Tools) + synthetic delegate tool
+    const orchestratorToolNames = session.orchestrator_tools || [];
+    const orchestratorTools = orchestratorToolNames.length > 0
+      ? toolRegistry.getToolDefinitionsForLLM(orchestratorToolNames)
+      : [];
+
+    const delegateToolDefinition = {
+      name: 'delegate_to_agent',
+      description: 'Delegate a task to one of the specialized agents on your team. The agent does NOT see the conversation history: it only receives your brief, so the task and context must be fully self-contained. The agent runs with its own system prompt, tools, and assigned documents, and its response is returned to you as the tool result. You can call this tool multiple times (for different agents or follow-up tasks) before writing your final answer.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: {
+            type: 'number',
+            description: 'The numeric ID of the agent to delegate to (see "Your Team" list).',
+          },
+          task: {
+            type: 'string',
+            description: 'A clear, self-contained description of what the agent must do.',
+          },
+          context: {
+            type: 'string',
+            description: 'All background information the agent needs (relevant facts from the conversation, data, constraints, prior results). The agent has NO other context.',
+          },
+          expected_output: {
+            type: 'string',
+            description: 'Optional: the format or content you expect back (e.g. "a bullet list of risks", "a table of figures").',
+          },
+        },
+        required: ['agent_id', 'task', 'context'],
+      },
+    };
+    const tools = [...orchestratorTools, delegateToolDefinition];
+
+    // Delegation guardrails (per user turn)
+    const maxDelegations = parseInt(process.env.ORCHESTRATOR_LED_MAX_DELEGATIONS, 10) || 10;
+    // 0 / unset = unlimited token budget for delegated agents
+    const delegationTokenBudget = parseInt(process.env.ORCHESTRATOR_LED_DELEGATION_TOKEN_BUDGET, 10) || 0;
+
+    // Emit structured delegation status events to the streaming channel.
+    // The chat route forwards these as dedicated SSE events (not text chunks).
+    const emitDelegationStatus = (payload) => {
+      if (!stream || typeof onChunk !== 'function') return;
+      try {
+        onChunk({ type: 'delegation_status', ...payload });
+      } catch (e) {
+        logger.warn('Failed to emit delegation status event:', e.message);
+      }
+    };
+
+    // Delegation handler (locally scoped tool, not in the global registry)
+    const delegations = [];
+    let delegatedTokens = 0;
+    // Counted synchronously at delegation start so the cap holds under parallel execution
+    let startedDelegations = 0;
+    const extraToolHandlers = new Map();
+    extraToolHandlers.set('delegate_to_agent', async (input) => {
+      if (startedDelegations >= maxDelegations) {
+        logger.warn(`Delegation cap reached (${maxDelegations}) for session ${session.id}`);
+        return {
+          success: false,
+          error: `Delegation limit reached (${maxDelegations} per turn). Do not delegate again. Write your final answer now using the specialist results you already have.`,
+        };
+      }
+      if (delegationTokenBudget > 0 && delegatedTokens >= delegationTokenBudget) {
+        logger.warn(`Delegation token budget reached (${delegatedTokens}/${delegationTokenBudget}) for session ${session.id}`);
+        return {
+          success: false,
+          error: `Delegation token budget exhausted (${delegatedTokens}/${delegationTokenBudget} tokens used). Do not delegate again. Write your final answer now using the specialist results you already have.`,
+        };
+      }
+
+      const agentId = parseInt(input.agent_id, 10);
+      const agent = agents.find(a => a.id === agentId);
+      if (!agent) {
+        return {
+          success: false,
+          error: `Agent with id "${input.agent_id}" is not assigned to this session. Valid agent IDs: ${agents.map(a => `${a.id} (${a.name})`).join(', ')}`,
+        };
+      }
+      const task = typeof input.task === 'string' ? input.task.trim() : '';
+      if (!task) {
+        return { success: false, error: 'A non-empty "task" is required.' };
+      }
+
+      startedDelegations++;
+      const delegationId = startedDelegations;
+      const taskPreview = task.length > 200 ? task.slice(0, 200) + '…' : task;
+      emitDelegationStatus({
+        status: 'started',
+        delegationId,
+        agentId: agent.id,
+        agentName: agent.name,
+        task: taskPreview,
+      });
+
+      try {
+        const result = await this.executeAgentWithBrief(agent, session, {
+          task,
+          context: input.context != null ? String(input.context) : '',
+          expectedOutput: input.expected_output != null ? String(input.expected_output) : '',
+        }, {
+          allAgents: agents,
+          documentContext: (documentContextByAgentId && documentContextByAgentId[agent.id] != null)
+            ? documentContextByAgentId[agent.id]
+            : documentContext,
+          processedMediaCacheInfo: processedMediaCacheByAgentId?.[agent.id] || [],
+        });
+
+        delegations.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          task,
+          content: result.content,
+          tokensUsed: result.tokensUsed || 0,
+        });
+        delegatedTokens += result.tokensUsed || 0;
+
+        emitDelegationStatus({
+          status: 'finished',
+          delegationId,
+          agentId: agent.id,
+          agentName: agent.name,
+          tokensUsed: result.tokensUsed || 0,
+        });
+
+        return {
+          success: true,
+          result: {
+            agent_id: agent.id,
+            agent_name: agent.name,
+            response: result.content,
+          },
+        };
+      } catch (error) {
+        logger.error(`Delegation to agent ${agent.name} failed:`, error);
+        delegations.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          task,
+          content: `[Error: ${error.message}]`,
+          tokensUsed: 0,
+          error: true,
+        });
+        emitDelegationStatus({
+          status: 'failed',
+          delegationId,
+          agentId: agent.id,
+          agentName: agent.name,
+          error: error.message,
+        });
+        return { success: false, error: `Agent "${agent.name}" failed: ${error.message}` };
+      }
+    });
+
+    // Build the lead-agent system prompt
+    const initialContext = session.description
+      ? `\n\n## Application Context\n\n${session.description}\n`
+      : '';
+
+    const agentList = agents.map(a =>
+      `- ${a.name} (ID: ${a.id}, Role: ${a.role}): ${this.getRoleDescription(a.role)}`
+    ).join('\n');
+
+    const agentJsonList = agents.length > 0 ? this.buildAgentJsonList(agents) : '{}';
+
+    const toolSummary = orchestratorTools.length > 0
+      ? `\n\n## Your Own Tools\n\nBesides delegation, you have direct access to the following tools. Use them when appropriate:\n${orchestratorTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}`
+      : '';
+
+    const systemPrompt = `You are the lead agent (orchestrator) of a multi-agent advisory team. You are the only team member who sees the full conversation history, and you are responsible for the final answer to the user.${initialContext}
+
+## Your Team
+
+You can delegate work to the following specialized agents using the delegate_to_agent tool:
+${agentList}
+
+Agent Details (JSON):
+${agentJsonList}
+
+## How to work
+
+- Answer simple or general questions yourself, without delegating.
+- When specialist expertise would improve the answer, delegate to the relevant agent(s) using delegate_to_agent.
+- IMPORTANT: delegated agents do NOT see the conversation history. Each brief must be fully self-contained: include all relevant facts, data, constraints, and prior results in the "task" and "context" fields.
+- Keep briefs focused and concise: include only what the agent needs, not the entire conversation.
+- You may delegate to multiple agents and you may send follow-up delegations based on earlier results, up to ${maxDelegations} delegations per user turn.
+- When tasks are independent, issue multiple delegate_to_agent calls in the SAME response: they will run in parallel, which is faster. Use sequential follow-up delegations only when one result depends on another.
+- Past assistant messages in the conversation history may include "[Specialist results behind this answer]" blocks with what each agent previously reported. Reuse those results instead of re-delegating identical tasks.
+- After gathering the results you need, write the final answer to the user yourself, synthesizing and reconciling the agents' contributions. Do not just paste raw agent output: integrate it.${toolSummary}${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`;
+
+    const ContextManager = require('../sessions/ContextManager');
+    const documentsSuffix = ContextManager.buildDocumentsSectionForOrchestrator(session) || '';
+    const userMessageWithDocs = userMessage + documentsSuffix;
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...context,
+      { role: 'user', content: userMessageWithDocs },
+    ];
+
+    logger.info('=== ORCHESTRATOR-LED MODE PROMPT ===');
+    const ledToolsLine = (tools && tools.length > 0) ? '\nTools: ' + tools.map(t => t.name).join(', ') : '';
+    promptsLogger.info('\n\n=== ORCHESTRATOR-LED MODE PROMPT ===\n' + JSON.stringify(messages, null, 2) + ledToolsLine);
+
+    const execOptions = {
+      stream,
+      onChunk,
+      extraToolHandlers,
+      // Independent delegations issued in one orchestrator response run concurrently
+      parallelToolNames: ['delegate_to_agent'],
+      // delegate_to_agent emits structured delegation_status events instead of raw [Tool] notices
+      toolNoticeExclude: ['delegate_to_agent'],
+    };
+    if (session.orchestrator_provider_config?.enablePromptCache) {
+      execOptions.usePromptCache = true;
+      execOptions.conversationId = conversationIdForCache(session.id, null);
+    }
+
+    const result = await this.executeWithTools(
+      provider,
+      messages,
+      tools,
+      { userId: session.user_id, sessionId: session.id, agentId: null },
+      execOptions
+    );
+
+    const delegatedNames = [...new Set(delegations.map(d => d.agentName))];
+    return {
+      content: result.content,
+      agentId: null,
+      agentName: 'Orchestrator',
+      routedTo: 'orchestrator_led',
+      reasoning: delegatedNames.length > 0
+        ? `Orchestrator-led: delegated to ${delegatedNames.join(', ')}`
+        : 'Orchestrator-led: handled without delegation',
+      tokensUsed: (result.tokensUsed || 0) + delegatedTokens,
+      toolCalls: result.toolCalls,
+      delegations,
+    };
+  }
+
+  /**
+   * Execute a specialized agent with ONLY an orchestrator-crafted brief (no conversation history).
+   * Used by orchestrator-led mode via the delegate_to_agent tool.
+   * @param {object} agent - The agent to run
+   * @param {object} session - Complete session object
+   * @param {{task: string, context: string, expectedOutput: string}} brief - Orchestrator-provided brief
+   * @param {object} options - { allAgents, documentContext, processedMediaCacheInfo }
+   * @returns {Promise<{content: string, tokensUsed: number, toolCalls: Array}>}
+   */
+  static async executeAgentWithBrief(agent, session, brief, options = {}) {
+    const { allAgents = null, documentContext = '', processedMediaCacheInfo = [] } = options;
+
+    await syncAssignedDocumentsToWorkspace(session.id, agent.id);
+
+    const provider = await AgentService.getAgentProvider(agent.id, session.user_id);
+
+    // No conversation summary: the agent works exclusively from the brief
+    const systemPrompt = this.buildAgentSystemPrompt(agent, allAgents, documentContext, null, processedMediaCacheInfo, session);
+
+    const { tools, allowedToolNames } = await this.buildToolsForAgent(session.id, agent.id);
+    const providerSupportsTools = !(provider && typeof provider.supportsTools === 'function' && !provider.supportsTools());
+    const providerTools = providerSupportsTools ? tools : [];
+    const providerAllowedToolNames = providerSupportsTools ? allowedToolNames : [];
+
+    const ContextManager = require('../sessions/ContextManager');
+    const documentsSuffix = (session.document_agent_assignment_map && ContextManager.buildDocumentsSectionForAgent(agent.id, session)) || '';
+
+    const briefSections = [
+      'You have been delegated a task by the team orchestrator. You do not have access to the conversation history; everything you need is in this brief.',
+      `## Task\n\n${brief.task}`,
+    ];
+    if (brief.context && brief.context.trim()) {
+      briefSections.push(`## Context (provided by the orchestrator)\n\n${brief.context.trim()}`);
+    }
+    if (brief.expectedOutput && brief.expectedOutput.trim()) {
+      briefSections.push(`## Expected Output\n\n${brief.expectedOutput.trim()}`);
+    }
+    briefSections.push('Complete the task now. Respond with your result only; it will be returned to the orchestrator.');
+
+    const briefMessage = briefSections.join('\n\n') + documentsSuffix;
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: briefMessage },
+    ];
+
+    logger.info(`=== AGENT BRIEF PROMPT: ${agent.name} (${agent.role}) ===`);
+    const briefToolsLine = (providerTools && providerTools.length > 0) ? '\nTools: ' + providerTools.map(t => t.name).join(', ') : '';
+    promptsLogger.info(`\n\n=== AGENT BRIEF PROMPT: ${agent.name} (${agent.role}) ===\n` + JSON.stringify(messages, null, 2) + briefToolsLine);
+
+    const execOpts = { stream: false, onChunk: null, allowedToolNames: providerAllowedToolNames };
+    if (agent.provider_config?.enablePromptCache) {
+      execOpts.usePromptCache = true;
+      execOpts.conversationId = conversationIdForCache(session.id, agent.id);
+    }
+
+    const result = await this.executeWithTools(
+      provider,
+      messages,
+      providerTools,
+      { userId: session.user_id, sessionId: session.id, agentId: agent.id },
+      execOpts
+    );
+
+    return {
+      content: result.content,
+      tokensUsed: result.tokensUsed,
+      toolCalls: result.toolCalls,
+    };
+  }
+
+  /**
    * Execute LLM call with tool support (handles tool use loop)
    */
   static async executeWithTools(provider, messages, tools, context, options) {
-    const { stream, onChunk, emitToolNotices = true, allowedToolNames = null, usePromptCache = false, conversationId = null } = options;
+    const {
+      stream,
+      onChunk,
+      emitToolNotices = true,
+      allowedToolNames = null,
+      usePromptCache = false,
+      conversationId = null,
+      extraToolHandlers = null,
+      parallelToolNames = null,
+      toolNoticeExclude = null,
+    } = options;
     const maxIterations = 100; // Prevent infinite loops
     let iterations = 0;
     let totalTokensUsed = 0;
     const toolCalls = [];
     const allowedToolNameSet = Array.isArray(allowedToolNames) ? new Set(allowedToolNames) : null;
+    const parallelToolNameSet = Array.isArray(parallelToolNames) ? new Set(parallelToolNames) : null;
+    const toolNoticeExcludeSet = Array.isArray(toolNoticeExclude) ? new Set(toolNoticeExclude) : null;
 
     // Make a copy of messages to avoid mutating the original
     const workingMessages = [...messages];
@@ -843,25 +1208,54 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
         logger.info(`=== ASSISTANT TOOL CALLS (Iteration ${iterations}) ===`);
         promptsLogger.info(`\n\n=== ASSISTANT TOOL CALLS (Iteration ${iterations}) ===\n` + JSON.stringify(assistantMessage, null, 2));
 
-        // Execute each tool call and add results
-        for (const toolCall of response.tool_calls) {
+        // Execute a single tool call and return its result
+        const executeToolCall = async (toolCall) => {
           const toolName = toolCall.name;
           logger.info(`Executing tool: ${toolName}`, { input: toolCall.input });
 
-          let toolResult;
+          const extraHandler = extraToolHandlers &&
+            (typeof extraToolHandlers.get === 'function' ? extraToolHandlers.get(toolName) : extraToolHandlers[toolName]);
+          if (extraHandler) {
+            // Locally-scoped tool (e.g. delegate_to_agent) not registered in the global ToolRegistry
+            try {
+              return await extraHandler(toolCall.input || {});
+            } catch (handlerError) {
+              logger.error(`Extra tool handler error (${toolName}):`, handlerError);
+              return { success: false, error: handlerError.message || 'Tool handler failed' };
+            }
+          }
           if (allowedToolNameSet && !allowedToolNameSet.has(toolName)) {
-            toolResult = {
+            logger.warn(`Blocked tool call (not allowed): ${toolName}`);
+            return {
               success: false,
               error: `Tool "${toolName}" is not enabled for this agent in this session.`,
             };
-            logger.warn(`Blocked tool call (not allowed): ${toolName}`);
-          } else {
-            toolResult = await toolExecutor.execute(
-              toolName,
-              toolCall.input,
-              context
-            );
           }
+          return await toolExecutor.execute(toolName, toolCall.input, context);
+        };
+
+        // Run tool calls in parallel when every call in this response is whitelisted
+        // for concurrency (e.g. independent delegate_to_agent calls); otherwise sequential.
+        const canParallelize = parallelToolNameSet &&
+          response.tool_calls.length > 1 &&
+          response.tool_calls.every(tc => parallelToolNameSet.has(tc.name));
+
+        let toolResults;
+        if (canParallelize) {
+          logger.info(`Executing ${response.tool_calls.length} tool calls in parallel: ${response.tool_calls.map(tc => tc.name).join(', ')}`);
+          toolResults = await Promise.all(response.tool_calls.map(tc => executeToolCall(tc)));
+        } else {
+          toolResults = [];
+          for (const tc of response.tool_calls) {
+            toolResults.push(await executeToolCall(tc));
+          }
+        }
+
+        // Append results to the conversation in the original tool-call order
+        for (let i = 0; i < response.tool_calls.length; i++) {
+          const toolCall = response.tool_calls[i];
+          const toolName = toolCall.name;
+          const toolResult = toolResults[i];
 
           toolCalls.push({
             name: toolName,
@@ -880,8 +1274,9 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
           logger.info(`=== TOOL RESULT ADDED: ${toolName} ===`);
           promptsLogger.info(`\n\n=== TOOL RESULT ADDED: ${toolName} ===\n` + JSON.stringify(toolResultMessage, null, 2));
 
-          // If streaming, notify about tool execution
-          if (emitToolNotices && stream && onChunk) {
+          // If streaming, notify about tool execution (excluded tools emit their own
+          // structured events instead, e.g. delegate_to_agent)
+          if (emitToolNotices && stream && onChunk && !(toolNoticeExcludeSet && toolNoticeExcludeSet.has(toolName))) {
             let inputPreview = '';
             try {
               inputPreview = toolCall?.input != null ? JSON.stringify(toolCall.input) : '';

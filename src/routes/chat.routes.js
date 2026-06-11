@@ -205,6 +205,11 @@ router.post('/:sessionId/stream', [
         stream: true,
         attachedDocumentsInfo,
         onChunk: (chunk) => {
+          // Structured delegation status events (orchestrator-led mode): forward as-is
+          if (chunk && typeof chunk === 'object' && chunk.type === 'delegation_status') {
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            return;
+          }
           // Extract text content from chunk object if needed; ensure string to avoid [object Object]
           let text = typeof chunk === 'string' ? chunk : (chunk && typeof chunk === 'object' ? (chunk.content ?? chunk.text ?? '') : '');
           if (typeof text !== 'string') text = String(text ?? '');

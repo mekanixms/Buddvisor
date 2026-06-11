@@ -1343,8 +1343,52 @@ class ChatInterface {
             <div class="message-content">
               ${formattedContent}
             </div>
+            ${this.renderDelegations(message)}
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Render collapsible "Agent contributions" block for orchestrator-led delegations
+   * stored in message metadata (metadata.delegations).
+   */
+  renderDelegations(message) {
+    const delegations = message?.metadata?.delegations;
+    if (!Array.isArray(delegations) || delegations.length === 0) return '';
+
+    const blockId = `delegations-${message.id || Math.random().toString(36).slice(2)}`;
+
+    const items = delegations.map((d, idx) => {
+      const itemId = `${blockId}-item-${idx}`;
+      const errorBadge = d.error ? '<span class="badge bg-danger ms-2">error</span>' : '';
+      return `
+        <div class="border rounded mb-1">
+          <button class="btn btn-sm w-100 text-start d-flex align-items-center" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#${itemId}"
+                  aria-expanded="false" aria-controls="${itemId}">
+            <i class="bi bi-chevron-expand me-1"></i>
+            <span class="badge bg-info me-2">${escapeHtml(d.agentName || `Agent ${d.agentId}`)}</span>
+            <span class="text-truncate small text-muted">${escapeHtml(d.task || '')}</span>
+            ${errorBadge}
+          </button>
+          <div class="collapse" id="${itemId}">
+            <div class="px-2 pb-2 small">
+              ${d.task ? `<div class="text-muted mb-1"><strong>Task:</strong> ${escapeHtml(d.task)}</div>` : ''}
+              <div style="white-space: pre-wrap;">${escapeHtml(d.content || '')}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="delegations-block mt-2 border-top pt-2">
+        <small class="text-muted d-block mb-1">
+          <i class="bi bi-people me-1"></i>Agent contributions (${delegations.length})
+        </small>
+        ${items}
       </div>
     `;
   }
@@ -1585,6 +1629,17 @@ class ChatInterface {
             assistantMessage.content += text;
             this.updateStreamingMessage(assistantMessage);
           },
+          onDelegationStatus: (evt) => {
+            // Live status of orchestrator-led delegations (started / finished / failed)
+            if (!assistantMessage.liveDelegations) assistantMessage.liveDelegations = [];
+            const existing = assistantMessage.liveDelegations.find(d => d.delegationId === evt.delegationId);
+            if (existing) {
+              Object.assign(existing, evt);
+            } else {
+              assistantMessage.liveDelegations.push(evt);
+            }
+            this.updateStreamingMessage(assistantMessage);
+          },
           onDone: async (data) => {
             assistantMessage.agent_name = data.agentName;
             this.renderMessages();
@@ -1625,12 +1680,54 @@ class ChatInterface {
     if (lastElement) {
       const contentDiv = lastElement.querySelector('.message-content');
       if (contentDiv) {
-        contentDiv.innerHTML = this.formatContent(message.content);
+        contentDiv.innerHTML = this.formatContent(message.content) + this.renderLiveDelegations(message);
         this.attachArtifactHandlers();
       }
     }
 
     this.scrollToBottom();
+  }
+
+  /**
+   * Render live delegation indicators while streaming (orchestrator-led mode).
+   * Ephemeral: replaced by the persisted "Agent contributions" block after the
+   * final message is rendered from the server.
+   */
+  renderLiveDelegations(message) {
+    const live = message?.liveDelegations;
+    if (!Array.isArray(live) || live.length === 0) return '';
+
+    const rows = live.map(d => {
+      const name = escapeHtml(d.agentName || `Agent ${d.agentId}`);
+      if (d.status === 'started') {
+        const task = d.task ? ` — ${escapeHtml(d.task)}` : '';
+        return `
+          <div class="small text-muted d-flex align-items-center">
+            <span class="spinner-border spinner-border-sm me-2" style="width: 0.8rem; height: 0.8rem;"></span>
+            <span class="text-truncate"><strong>${name}</strong> is working${task}</span>
+          </div>`;
+      }
+      if (d.status === 'finished') {
+        const tokens = d.tokensUsed ? ` (${d.tokensUsed} tokens)` : '';
+        return `
+          <div class="small text-muted d-flex align-items-center">
+            <i class="bi bi-check-circle-fill text-success me-2"></i>
+            <span><strong>${name}</strong> finished${tokens}</span>
+          </div>`;
+      }
+      // failed
+      return `
+        <div class="small text-muted d-flex align-items-center">
+          <i class="bi bi-x-circle-fill text-danger me-2"></i>
+          <span><strong>${name}</strong> failed${d.error ? `: ${escapeHtml(d.error)}` : ''}</span>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="live-delegations border-top mt-2 pt-2">
+        <small class="text-muted d-block mb-1"><i class="bi bi-people me-1"></i>Delegating to specialists…</small>
+        ${rows}
+      </div>`;
   }
 
   /**

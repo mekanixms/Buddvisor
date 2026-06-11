@@ -244,6 +244,16 @@ class SessionConfig {
                              value="${this.currentSession.context_length || 10}" min="1" max="200">
                       <div class="form-text">Number of recent messages to include in context (1-200)</div>
                     </div>
+                    <div class="mb-3">
+                      <label class="form-label">Orchestration Mode</label>
+                      <select class="form-select" id="config-orchestration-mode">
+                        <option value="route" ${(this.currentSession.orchestration_mode || 'route') === 'route' ? 'selected' : ''}>Router (classic) — orchestrator routes to agents, agents see their own history</option>
+                        <option value="orchestrator_led" ${this.currentSession.orchestration_mode === 'orchestrator_led' ? 'selected' : ''}>Orchestrator-led (delegation) — orchestrator leads and sends self-contained briefs to agents</option>
+                      </select>
+                      <div class="form-text">
+                        In <strong>Orchestrator-led</strong> mode, only the orchestrator sees the full conversation history. It delegates tasks to agents with self-contained briefs and synthesizes the final answer — saving tokens on specialized agents. Requires a capable orchestrator model.
+                      </div>
+                    </div>
                   </form>
                 </div>
 
@@ -2030,6 +2040,9 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       const maxRounds = parseInt(document.getElementById('config-max-rounds')?.value) || 10;
       const tokenBudget = parseInt(document.getElementById('config-token-budget')?.value) || 50000;
 
+      // Get orchestration mode
+      const orchestrationMode = document.getElementById('config-orchestration-mode')?.value || 'route';
+
       // Update session
       await api.sessions.update(this.currentSession.id, {
         name,
@@ -2040,6 +2053,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         conversation_mode_enabled: conversationModeEnabled ? 1 : 0,
         conversation_max_rounds: maxRounds,
         conversation_token_budget: tokenBudget,
+        orchestration_mode: orchestrationMode,
       });
 
       // Get selected agents

@@ -40,6 +40,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Persistent Work Sessions**: Create named projects (e.g., "Q4 Tax Planning") with auto-save
 - **Multi-Agent System**: User-defined specialized agents (legal, accounting, marketing, sales, etc.)
 - **Adaptive Orchestration**: Intelligent task routing with sequential or parallel execution
+- **Two Orchestration Modes**: Classic router (agents keep their own history) or orchestrator-led delegation (orchestrator briefs agents, saving tokens)
 - **Document Management**: Upload and manage documents with local embeddings (Transformers.js + FAISS)
 - **Chat & Task Modes**: Casual conversation or formal task submission
 - **MCP Tool Integration**: File system operations, web search, email
@@ -360,6 +361,25 @@ Recommended n8n node settings:
 5. **Session Persistence**: All interactions auto-saved, reload anytime
 
 ## Configuration
+
+### Orchestration Modes
+
+Each session has an **Orchestration Mode** (Configure Session → **General** → Orchestration Mode) that controls how the orchestrator works with the session's agents in normal chat:
+
+- **Router (classic, default)**: The orchestrator analyzes each user message and routes it to one agent, multiple agents, or handles it directly. Each invoked agent receives its own conversation history (user messages + that agent's previous replies) along with its system prompt and assigned documents.
+- **Orchestrator-led (delegation)**: The orchestrator is the lead agent. It is the only one that sees the full conversation history, and it delegates work to specialized agents using a `delegate_to_agent` tool with **self-contained briefs** (task + context + expected output). Delegated agents receive **only the brief** — no conversation history — which significantly reduces token usage on specialist models. The orchestrator can delegate multiple times (including follow-ups based on earlier results) and then writes the final synthesized answer itself.
+
+Notes for orchestrator-led mode:
+
+- Use a capable model for the orchestrator (Configure Session → **Orchestrator**), since it carries the conversation, crafts the briefs, and synthesizes the final answer.
+- Delegated agents still use their own system prompt, provider/model, assigned tools, and assigned documents.
+- Agent contributions are stored with the response and shown in the chat as a collapsible "Agent contributions" block under the orchestrator's answer.
+- The orchestrator remembers past specialist results: compact delegation summaries are included in its conversation history, so it reuses earlier answers instead of re-delegating identical tasks.
+- Guardrails: delegations are capped per user turn via `ORCHESTRATOR_LED_MAX_DELEGATIONS` (default 10), and an optional token budget for delegated agents can be set with `ORCHESTRATOR_LED_DELEGATION_TOKEN_BUDGET` (0/unset = unlimited).
+- Independent delegations issued together run in parallel, reducing response time when multiple specialists are consulted.
+- While streaming, the chat shows live status indicators ("Agent X is working…" / finished / failed) for each delegation in progress.
+- `@agent` mentions and scheduled jobs always address agents directly, in both modes.
+- If no orchestrator API key is configured, the session falls back to classic routing.
 
 ### LLM Providers
 

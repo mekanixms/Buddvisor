@@ -280,8 +280,15 @@ class Message {
   /**
    * Format messages for LLM API calls
    * Converts database messages to the format expected by LLM providers
+   * @param {Array} messages - Database message rows
+   * @param {object} [options]
+   * @param {boolean} [options.includeDelegationSummaries=false] - Append compact summaries of
+   *   metadata.delegations to assistant messages (used in orchestrator-led mode so the
+   *   orchestrator remembers what each agent reported in past turns and avoids re-delegating)
    */
-  static formatForLLM(messages) {
+  static formatForLLM(messages, options = {}) {
+    const { includeDelegationSummaries = false } = options;
+
     return messages.map(m => {
       const formatted = {
         role: m.role,
@@ -293,8 +300,49 @@ class Message {
         formatted.content = `[${m.agent_name}]: ${m.content}`;
       }
 
+      if (includeDelegationSummaries && m.role === 'assistant') {
+        const summary = this.buildDelegationSummary(m);
+        if (summary) {
+          formatted.content += summary;
+        }
+      }
+
       return formatted;
     });
+  }
+
+  /**
+   * Build a compact summary of metadata.delegations for an assistant message.
+   * Handles both parsed metadata objects and raw JSON strings (getContextMessages
+   * does not parse metadata).
+   * @returns {string|null} - Summary text to append, or null if no delegations
+   */
+  static buildDelegationSummary(message) {
+    let metadata = message.metadata;
+    if (metadata && typeof metadata === 'string') {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch {
+        return null;
+      }
+    }
+
+    const delegations = metadata?.delegations;
+    if (!Array.isArray(delegations) || delegations.length === 0) return null;
+
+    const truncate = (text, max) => {
+      const s = String(text || '').replace(/\s+/g, ' ').trim();
+      return s.length > max ? s.slice(0, max) + '…' : s;
+    };
+
+    const lines = delegations.map(d => {
+      const name = d.agentName || `Agent ${d.agentId}`;
+      const task = truncate(d.task, 150);
+      const result = d.error ? '[failed]' : truncate(d.content, 500);
+      return `- ${name} — task: "${task}" → result: ${result}`;
+    });
+
+    return `\n\n[Specialist results behind this answer — reuse them instead of re-delegating identical tasks:]\n${lines.join('\n')}`;
   }
 
   /**

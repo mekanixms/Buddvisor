@@ -295,7 +295,7 @@ class APIClient {
      * @returns {function} - Abort function to cancel the stream
      */
     streamMessage: (sessionId, message, callbacks = {}, attachedDocumentsInfo = null) => {
-      const { onChunk, onDone, onError } = callbacks;
+      const { onChunk, onDone, onError, onDelegationStatus } = callbacks;
       const controller = new AbortController();
 
       // Use fetch with POST for SSE (not standard EventSource which only supports GET)
@@ -351,6 +351,8 @@ class APIClient {
                   const parsed = JSON.parse(data);
                   if (parsed.type === 'chunk' && onChunk) {
                     onChunk(parsed.content);
+                  } else if (parsed.type === 'delegation_status' && onDelegationStatus) {
+                    onDelegationStatus(parsed);
                   } else if (parsed.type === 'done' && onDone) {
                     onDone(parsed);
                   } else if (parsed.type === 'error' && onError) {

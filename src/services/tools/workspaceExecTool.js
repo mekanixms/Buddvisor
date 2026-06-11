@@ -11,51 +11,7 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const { spawn } = require('child_process');
 const os = require('os');
-
-// Import workspace functions from localWorkingFolderTool
-// Note: We'll reimplement getWorkspacePath here to avoid circular dependencies
-const crypto = require('crypto');
-const STORAGE_DIR = path.join(process.cwd(), 'storage', 'agents-workspaces');
-
-/**
- * Get workspace path (duplicated from localWorkingFolderTool to avoid circular deps)
- */
-function getWorkspacePathForExec(folderName, sessionId, agentId) {
-  // Handle orchestrator case (agentId is null/undefined)
-  const entityId = agentId !== null && agentId !== undefined ? agentId : 'orchestrator';
-  const uniqueId = crypto
-    .createHash('sha256')
-    .update(`${sessionId}-${entityId}-${folderName}`)
-    .digest('hex')
-    .substring(0, 16);
-  
-  const sanitized = folderName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
-  const dirName = `${sanitized}_${uniqueId}`;
-  return path.resolve(STORAGE_DIR, dirName);
-}
-
-/**
- * Resolve workspace path with validation (duplicated from localWorkingFolderTool)
- */
-function resolveWorkspacePathForExec(relativePath, workspacePath) {
-  if (!relativePath || typeof relativePath !== 'string') {
-    throw new Error('Path must be a non-empty string');
-  }
-
-  const normalized = path.normalize(relativePath);
-  let cleanPath = normalized.replace(/^\.\//, '').replace(/^\.$/, '');
-  if (cleanPath === '') cleanPath = '.';
-  
-  const resolved = path.resolve(workspacePath, cleanPath);
-  const workspaceReal = path.resolve(workspacePath);
-  const resolvedReal = path.resolve(resolved);
-  
-  if (!resolvedReal.startsWith(workspaceReal + path.sep) && resolvedReal !== workspaceReal) {
-    throw new Error(`Path traversal detected: ${relativePath} resolves outside workspace`);
-  }
-  
-  return resolvedReal;
-}
+const { getWorkspacePath, resolveWorkspacePath } = require('./localWorkingFolderTool');
 
 // Dangerous command patterns to block
 const DANGEROUS_PATTERNS = [
@@ -356,12 +312,14 @@ function registerWorkspaceExecTool() {
         throw new Error(`Workspace folder name not configured for this ${entity}. Please configure local_working_folder in Session Settings → Tools.`);
       }
 
-      // Get workspace path
+      // Get workspace path (must match local_working_folder, including randomize_name)
       const agentId = context.agentId !== undefined ? context.agentId : null;
-      const workspacePath = getWorkspacePathForExec(
+      const randomizeName = workspaceConfig.randomize_name !== false;
+      const workspacePath = getWorkspacePath(
         workspaceConfig.folder_name.trim(),
         context.sessionId,
-        agentId
+        agentId,
+        randomizeName
       );
 
       // Ensure workspace exists
@@ -373,7 +331,7 @@ function registerWorkspaceExecTool() {
       // Resolve cwd within workspace
       let execCwd = workspacePath;
       if (cwd) {
-        execCwd = resolveWorkspacePathForExec(cwd, workspacePath);
+        execCwd = resolveWorkspacePath(cwd, workspacePath);
         // Ensure it's a directory
         const stats = await fs.stat(execCwd).catch(() => null);
         if (!stats || !stats.isDirectory()) {

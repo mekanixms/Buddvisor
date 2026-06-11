@@ -463,6 +463,13 @@ class SessionService {
         allowedUpdates.conversation_token_budget = tokenBudget;
       }
 
+      if (updates.orchestration_mode !== undefined) {
+        if (!['route', 'orchestrator_led'].includes(updates.orchestration_mode)) {
+          throw new Error('Orchestration mode must be "route" or "orchestrator_led"');
+        }
+        allowedUpdates.orchestration_mode = updates.orchestration_mode;
+      }
+
       if (updates.pinned !== undefined) {
         allowedUpdates.pinned = updates.pinned ? 1 : 0;
       }

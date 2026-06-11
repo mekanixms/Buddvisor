@@ -334,6 +334,10 @@ router.put('/:id', [
       .optional()
       .isInt({ min: 1000, max: 500000 })
       .withMessage('conversation_token_budget must be between 1,000 and 500,000'),
+    body('orchestration_mode')
+      .optional()
+      .isIn(['route', 'orchestrator_led'])
+      .withMessage('orchestration_mode must be "route" or "orchestrator_led"'),
     body('pinned')
       .optional()
       .isInt({ min: 0, max: 1 })

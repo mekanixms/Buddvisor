@@ -127,6 +127,7 @@ class WorkSession {
         'conversation_mode_enabled',
         'conversation_max_rounds',
         'conversation_token_budget',
+        'orchestration_mode',
         'pinned',
         'share_token',
       ];

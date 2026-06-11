@@ -151,8 +151,11 @@ class ChatService {
         metadata: metadataToStore,
       });
 
-      // Build context
-      const context = await this.buildContext(sessionId, session.context_length || 50);
+      // Build context. In orchestrator-led mode, include compact summaries of past
+      // delegations so the orchestrator remembers specialist results across turns.
+      const context = await this.buildContext(sessionId, session.context_length || 50, {
+        includeDelegationSummaries: session.orchestration_mode === 'orchestrator_led',
+      });
 
       // If user explicitly requests running process_media on a specific file, run it server-side first.
       // This avoids relying on the LLM/tool-calling support of the selected model (e.g., many Ollama VL models).
@@ -335,8 +338,10 @@ class ChatService {
         };
       }
 
-      // Use orchestrator for multi-agent routing
-      const orchestratorResult = await OrchestratorAgent.process({
+      // Orchestrator-led mode: orchestrator is the lead agent and delegates
+      // self-contained briefs to specialized agents (no history sent to agents).
+      // Classic mode: orchestrator routes the message to agent(s) with their own history.
+      const orchestratorParams = {
         session,
         agents,
         context,
@@ -346,7 +351,10 @@ class ChatService {
         processedMediaCacheByAgentId,
         stream,
         onChunk,
-      });
+      };
+      const orchestratorResult = session.orchestration_mode === 'orchestrator_led'
+        ? await OrchestratorAgent.processOrchestratorLed(orchestratorParams)
+        : await OrchestratorAgent.process(orchestratorParams);
 
       // Extract and create artifacts from the response content
       const ArtifactService = require('../artifacts/ArtifactService');
@@ -361,6 +369,10 @@ class ChatService {
       
       if (artifacts.length > 0) {
         metadata.artifacts = artifacts;
+      }
+
+      if (Array.isArray(orchestratorResult.delegations) && orchestratorResult.delegations.length > 0) {
+        metadata.delegations = orchestratorResult.delegations;
       }
 
       await Message.create({
@@ -444,10 +456,13 @@ class ChatService {
 
   /**
    * Build conversation context from recent messages
+   * @param {number} sessionId - Session ID
+   * @param {number} contextLength - Max messages to include
+   * @param {object} [options] - Formatting options (e.g. includeDelegationSummaries)
    */
-  static async buildContext(sessionId, contextLength) {
+  static async buildContext(sessionId, contextLength, options = {}) {
     const messages = await Message.getContextMessages(sessionId, contextLength);
-    return Message.formatForLLM(messages);
+    return Message.formatForLLM(messages, options);
   }
 
   /**
