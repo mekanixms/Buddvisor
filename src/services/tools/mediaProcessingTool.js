@@ -23,8 +23,42 @@ function getProcessMediaCacheFilename(doc) {
   return `${doc.id}_${hash}.json`;
 }
 
-async function writeProcessMediaCacheIfConfigured(workspacePath, doc, payload) {
+function isProcessMediaCacheResultValid(cached, fileType) {
+  if (!cached || cached.error) return false;
+  const ft = String(fileType || cached.document?.file_type || '');
+  if (ft.startsWith('audio/')) {
+    const t = cached.result?.transcript;
+    return typeof t === 'string' && t.trim().length > 0;
+  }
+  if (ft.startsWith('image/')) {
+    const t = cached.result?.text;
+    return typeof t === 'string' && t.trim().length > 0;
+  }
+  if (cached.result?.metadata?.error) return false;
+  return true;
+}
+
+function buildAudioTranscriptionWarning(transcript) {
+  const parts = [];
+  const meta = transcript?.metadata || {};
+  if (meta.error) parts.push(`Transcription error: ${meta.error}`);
+  if (meta.transcriber && meta.model) {
+    parts.push(`Engine: ${meta.transcriber} (${meta.model})`);
+  }
+  if (meta.routing_source) parts.push(`Routed via: ${meta.routing_source}`);
+  if (meta.caller_model) parts.push(`Caller: ${meta.caller_model}`);
+  if (!String(transcript?.text || '').trim()) {
+    parts.push('Transcript is empty — do not assume the recording is silent; retry or check server logs.');
+  }
+  return parts.length ? parts.join(' | ') : null;
+}
+
+async function writeProcessMediaCacheIfConfigured(workspacePath, doc, payload, fileType) {
   if (!workspacePath) return payload;
+  if (!isProcessMediaCacheResultValid(payload, fileType)) {
+    logger.warn(`process_media cache skip (empty or error result): ${doc.filename}`);
+    return payload;
+  }
   try {
     const cacheDir = path.join(workspacePath, PROCESS_MEDIA_CACHE_DIR);
     await fsPromises.mkdir(cacheDir, { recursive: true });
@@ -67,6 +101,8 @@ function truncateString(value, maxChars) {
 
 const {
   inferModelCapabilities,
+  ollamaModelLikelySupportsAudio,
+  ollamaModelLikelySupportsVision,
   parseStoredCapabilitiesJson,
   mergeWithStored,
 } = require('../../utils/modelCapabilities');
@@ -126,6 +162,213 @@ async function getOrchestratorModelInfo(sessionId) {
   };
 }
 
+/**
+ * Collect session providers that may run vision/audio (caller, orchestrator, other agents).
+ */
+async function collectMediaProviderCandidates(sessionId, callerAgentId) {
+  const candidates = [];
+  const seen = new Set();
+
+  const add = (source, info) => {
+    if (!info) return;
+    const key = `${info.providerType}:${info.model}:${info.baseURL || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ source, info, caps: info.capabilities || null });
+  };
+
+  if (Number.isFinite(callerAgentId)) {
+    add(`caller:agent:${callerAgentId}`, await getAgentModelInfo(callerAgentId));
+  } else {
+    add('caller:orchestrator', await getOrchestratorModelInfo(sessionId));
+  }
+
+  add('orchestrator', await getOrchestratorModelInfo(sessionId));
+
+  try {
+    const agents = await WorkSession.getAgents(sessionId);
+    for (const agent of agents || []) {
+      if (agent.id === callerAgentId) continue;
+      add(`agent:${agent.id}`, await getAgentModelInfo(agent.id));
+    }
+  } catch (e) {
+    logger.warn(`process_media: could not list session agents: ${e?.message || e}`);
+  }
+
+  return candidates;
+}
+
+function pickOllamaAudioCandidate(candidates) {
+  return (candidates || []).find(c => shouldUseOllamaAudio(c.info, c.caps)) || null;
+}
+
+function pickOllamaVisionCandidate(candidates) {
+  return (candidates || []).find(c => shouldUseOllamaVision(c.info, c.caps)) || null;
+}
+
+/**
+ * Pick the best provider for audio (e.g. orchestrator Ollama when caller is cloud Gemini).
+ */
+async function resolveAudioProvider(sessionId, callerAgentInfo) {
+  const callerAgentId = callerAgentInfo?.agentId ?? null;
+  const candidates = await collectMediaProviderCandidates(sessionId, callerAgentId);
+  const ollamaPick = pickOllamaAudioCandidate(candidates);
+  if (ollamaPick) {
+    if (ollamaPick.source !== `caller:agent:${callerAgentId}` && ollamaPick.source !== 'caller:orchestrator') {
+      logger.info(
+        `process_media audio: routing to ${ollamaPick.source} ${ollamaPick.info.providerType}:${ollamaPick.info.model} (caller=${callerAgentInfo?.providerType || 'unknown'}:${callerAgentInfo?.model || 'unknown'})`
+      );
+    }
+    return {
+      agentInfo: ollamaPick.info,
+      caps: ollamaPick.caps,
+      routingSource: ollamaPick.source,
+    };
+  }
+
+  const caller =
+    candidates.find(c => c.source === `caller:agent:${callerAgentId}`) ||
+    candidates.find(c => c.source === 'caller:orchestrator') ||
+    candidates[0];
+  return {
+    agentInfo: caller?.info || callerAgentInfo,
+    caps: caller?.caps || callerAgentInfo?.capabilities || null,
+    routingSource: caller?.source || 'caller',
+  };
+}
+
+/**
+ * Pick the best provider for vision when caller cannot handle images natively.
+ */
+async function resolveVisionProvider(sessionId, callerAgentInfo, caps) {
+  const canUseCaller =
+    (callerAgentInfo?.providerType === 'gemini' && caps?.vision) ||
+    (callerAgentInfo?.providerType === 'kimi' && caps?.vision) ||
+    shouldUseOllamaVision(callerAgentInfo, caps);
+  if (canUseCaller) {
+    return { agentInfo: callerAgentInfo, caps, routingSource: 'caller' };
+  }
+
+  const callerAgentId = callerAgentInfo?.agentId ?? null;
+  const candidates = await collectMediaProviderCandidates(sessionId, callerAgentId);
+  const geminiPick = candidates.find(c => c.info?.providerType === 'gemini' && c.caps?.vision);
+  if (geminiPick) {
+    logger.info(`process_media vision: routing to ${geminiPick.source} gemini:${geminiPick.info.model}`);
+    return { agentInfo: geminiPick.info, caps: geminiPick.caps, routingSource: geminiPick.source };
+  }
+  const ollamaPick = pickOllamaVisionCandidate(candidates);
+  if (ollamaPick) {
+    logger.info(`process_media vision: routing to ${ollamaPick.source} ollama:${ollamaPick.info.model}`);
+    return { agentInfo: ollamaPick.info, caps: ollamaPick.caps, routingSource: ollamaPick.source };
+  }
+  return { agentInfo: callerAgentInfo, caps, routingSource: 'caller' };
+}
+
+/**
+ * Whether process_media should use the agent's Ollama model for audio (vs Whisper fallback).
+ */
+function shouldUseOllamaAudio(agentInfo, caps) {
+  if (agentInfo?.providerType !== 'ollama') return false;
+  if (caps?.audio === true) return true;
+  if (ollamaModelLikelySupportsAudio(agentInfo?.model)) return true;
+  return false;
+}
+
+/**
+ * Whether process_media should use the agent's Ollama model for vision (vs OpenAI fallback).
+ */
+function shouldUseOllamaVision(agentInfo, caps) {
+  if (agentInfo?.providerType !== 'ollama') return false;
+  if (caps?.vision === true) return true;
+  // Model-name heuristic wins over stale stored vision:false (e.g. Gemma 3 not tagged on HF).
+  if (ollamaModelLikelySupportsVision(agentInfo?.model)) return true;
+  return false;
+}
+
+/**
+ * Route image analysis to the agent's provider (or OpenAI fallback for text-only agents).
+ */
+async function analyzeImageForAgent(sessionId, callerAgentInfo, caps, imagePath, prompt, maxTokens = 800) {
+  const resolved = await resolveVisionProvider(sessionId, callerAgentInfo, caps);
+  const agentInfo = resolved.agentInfo;
+  caps = resolved.caps;
+
+  if (agentInfo?.providerType === 'gemini' && caps?.vision) {
+    const model = agentInfo?.model || process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash';
+    logger.info(`process_media vision: gemini model=${model}`);
+    return analyzeImageWithGemini(imagePath, prompt, { model, maxTokens });
+  }
+  if (agentInfo?.providerType === 'kimi' && caps?.vision) {
+    const baseURL = agentInfo?.baseURL || process.env.KIMI_BASE_URL || process.env.MOONSHOT_BASE_URL;
+    const model = agentInfo?.model || process.env.KIMI_VISION_MODEL || 'kimi-k2-instruct';
+    logger.info(`process_media vision: kimi model=${model}`);
+    return analyzeImageWithKimi(imagePath, prompt, { baseURL, model, maxTokens });
+  }
+  if (shouldUseOllamaVision(agentInfo, caps)) {
+    const baseURL = agentInfo?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    const model = agentInfo?.model || process.env.OLLAMA_VISION_MODEL || 'qwen3-vl';
+    logger.info(`process_media vision: ollama model=${model} baseURL=${baseURL}`);
+    return analyzeImageWithOllama(imagePath, prompt, { baseURL, model, maxTokens });
+  }
+
+  logger.warn(
+    `process_media vision: falling back to OpenAI for ${agentInfo?.providerType || 'unknown'}:${agentInfo?.model || 'unknown'} (vision=${caps?.vision})`
+  );
+  return analyzeImageWithOpenAI(imagePath, prompt, { maxTokens });
+}
+
+/**
+ * Route audio transcription to the agent's provider (Ollama for multimodal models, else Whisper).
+ */
+async function transcribeAudioForAgent(sessionId, callerAgentInfo, caps, audioPath, instruction) {
+  const prompt =
+    instruction?.trim() ||
+    'Transcribe this audio verbatim. Output only the transcript text.';
+
+  const resolved = await resolveAudioProvider(sessionId, callerAgentInfo);
+  const agentInfo = resolved.agentInfo;
+  caps = resolved.caps;
+
+  if (shouldUseOllamaAudio(agentInfo, caps)) {
+    const baseURL = agentInfo?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    const model = agentInfo?.model || process.env.OLLAMA_AUDIO_MODEL || 'gemma3:12b';
+    logger.info(
+      `process_media audio: ollama model=${model} baseURL=${baseURL} routing=${resolved.routingSource}`
+    );
+    const result = await MediaTranscriptionService.transcribeAudioWithOllama(audioPath, {
+      baseURL,
+      model,
+      prompt,
+      maxTokens: 4000,
+    });
+    return {
+      ...result,
+      metadata: {
+        ...(result.metadata || {}),
+        routing_source: resolved.routingSource,
+        caller_model: callerAgentInfo?.model
+          ? `${callerAgentInfo.providerType}:${callerAgentInfo.model}`
+          : null,
+      },
+    };
+  }
+
+  logger.warn(
+    `process_media audio: falling back to Whisper for ${agentInfo?.providerType || 'unknown'}:${agentInfo?.model || 'unknown'} (audio=${caps?.audio})`
+  );
+  const whisperResult = await MediaTranscriptionService.transcribeAudioWithWhisper(audioPath);
+  return {
+    ...whisperResult,
+    metadata: {
+      ...(whisperResult.metadata || {}),
+      routing_source: resolved.routingSource,
+      caller_model: callerAgentInfo?.model
+        ? `${callerAgentInfo.providerType}:${callerAgentInfo.model}`
+        : null,
+    },
+  };
+}
+
 async function analyzeImageWithOllama(imagePath, prompt, options = {}) {
   const {
     baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
@@ -166,11 +409,22 @@ async function analyzeImageWithOllama(imagePath, prompt, options = {}) {
         detail = '';
       }
     }
-    throw new Error(`Ollama vision request failed (${res.status}): ${detail || res.statusText}`);
+    const errMsg = `Ollama vision request failed (${res.status}): ${detail || res.statusText}`;
+    logger.error(`process_media ${errMsg}`);
+    throw new Error(errMsg);
   }
 
   const data = await res.json();
-  const text = (data?.message?.content || data?.response || '').trim();
+  const rawContent = data?.message?.content ?? data?.response ?? '';
+  const text = (typeof rawContent === 'string'
+    ? rawContent
+    : Array.isArray(rawContent)
+      ? rawContent.map(c => (c?.text ?? c?.content ?? '')).join('')
+      : String(rawContent?.text ?? rawContent?.content ?? '')
+  ).trim();
+  if (!text) {
+    logger.warn(`process_media ollama vision returned empty content for model=${model}`);
+  }
   return { text, metadata: { model, provider: 'ollama', baseURL } };
 }
 
@@ -192,22 +446,31 @@ async function analyzeImageWithOpenAI(imagePath, prompt, options = {}) {
   const base64 = fs.readFileSync(imagePath).toString('base64');
   const client = new OpenAI({ apiKey });
 
-  const resp = await client.chat.completions.create({
-    model,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
-        ],
-      },
-    ],
-    max_tokens: maxTokens,
-  });
+  try {
+    const resp = await client.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
+          ],
+        },
+      ],
+      max_tokens: maxTokens,
+    });
 
-  const text = (resp.choices?.[0]?.message?.content || '').trim();
-  return { text, metadata: { model, provider: 'openai' } };
+    const text = (resp.choices?.[0]?.message?.content || '').trim();
+    return { text, metadata: { model, provider: 'openai' } };
+  } catch (err) {
+    const errMsg = err?.message || String(err);
+    logger.error(`process_media OpenAI vision failed: ${errMsg}`);
+    return {
+      text: '',
+      metadata: { error: errMsg, model, provider: 'openai' },
+    };
+  }
 }
 
 async function analyzeImageWithGemini(imagePath, prompt, options = {}) {
@@ -290,7 +553,7 @@ function registerMediaProcessingTool() {
   toolRegistry.register({
     name: 'process_media',
     description:
-      'Process an image/audio/video/PDF document (by filename) assigned to this session (or to this agent) in Configure Session → Documents. Images: vision description. Audio: transcript. Video: transcript + frame descriptions. PDF: extracted text (pdf-parse) + vision description of each page (requires pdftoppm/poppler). When local_working_folder is configured, results are cached there (.process_media_cache/) for quick reuse without reprocessing.',
+      'Process an image/audio/video/PDF document (by filename) assigned to this session (or to this agent) in Configure Session → Documents. Images: vision description (agent provider or fallback). Audio: transcript via the agent Ollama model when audio-capable (e.g. Gemma), otherwise OpenAI Whisper. Video: transcript + frame descriptions. PDF: extracted text (pdf-parse) + vision description of each page (requires pdftoppm/poppler). When local_working_folder is configured, results are cached there (.process_media_cache/) for quick reuse without reprocessing.',
     category: 'multimodal',
     parameters: {
       document_name: {
@@ -397,12 +660,20 @@ function registerMediaProcessingTool() {
         try {
           if (fs.existsSync(cachePath)) {
             const cached = JSON.parse(await fsPromises.readFile(cachePath, 'utf-8'));
-            logger.info(`process_media cache hit: ${doc.filename}`);
-            return {
-              ...cached,
-              from_cache: true,
-              cache_path: cacheRelativePath,
-            };
+            if (isProcessMediaCacheResultValid(cached, fileType)) {
+              logger.info(`process_media cache hit: ${doc.filename}`);
+              return {
+                ...cached,
+                from_cache: true,
+                cache_path: cacheRelativePath,
+              };
+            }
+            logger.warn(`process_media cache ignored (empty/stale): ${doc.filename}`);
+            try {
+              await fsPromises.unlink(cachePath);
+            } catch {
+              /* ignore */
+            }
           }
         } catch (e) {
           logger.warn(`process_media cache read failed: ${e?.message || e}`);
@@ -415,27 +686,23 @@ function registerMediaProcessingTool() {
           'Describe this image in detail. If it contains text, extract ALL text verbatim. If it is a UI screenshot, call out errors/warnings and key UI elements.';
 
         let vision;
-        if (agentInfo?.providerType === 'gemini' && caps?.vision) {
-          const model = agentInfo?.model || process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash';
-          vision = await analyzeImageWithGemini(filePath, prompt, { model, maxTokens: 800 });
-        } else if (agentInfo?.providerType === 'kimi' && caps?.vision) {
-          const baseURL = agentInfo?.baseURL || process.env.KIMI_BASE_URL || process.env.MOONSHOT_BASE_URL;
-          const model = agentInfo?.model || process.env.KIMI_VISION_MODEL || 'kimi-k2-instruct';
-          vision = await analyzeImageWithKimi(filePath, prompt, { baseURL, model, maxTokens: 800 });
-        } else if (agentInfo?.providerType === 'ollama' && caps?.vision) {
-          // Use the agent's local Ollama vision model (e.g. qwen3-vl) when available.
-          const baseURL = agentInfo?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-          const model = agentInfo?.model || process.env.OLLAMA_VISION_MODEL || 'qwen3-vl';
-          vision = await analyzeImageWithOllama(filePath, prompt, { baseURL, model, maxTokens: 800 });
-        } else {
-          // Fallback to OpenAI vision if configured.
-          vision = await analyzeImageWithOpenAI(filePath, prompt);
+        try {
+          vision = await analyzeImageForAgent(sessionId, agentInfo, caps, filePath, prompt, 800);
+        } catch (visionErr) {
+          logger.error(`process_media image vision failed: ${visionErr?.message || visionErr}`);
+          return {
+            error: `Vision analysis failed: ${visionErr?.message || visionErr}`,
+            document: { id: doc.id, filename: doc.filename, file_type: fileType },
+            agent_model: modelHint,
+          };
         }
 
         const warning =
-          caps && caps.vision === false
-            ? 'Note: this agent model appears text-only; media understanding is being performed via the tool.'
-            : null;
+          vision?.metadata?.error
+            ? `Vision fallback error: ${vision.metadata.error}`
+            : caps && caps.vision === false && !shouldUseOllamaVision(agentInfo, caps)
+              ? 'Note: this agent model appears text-only; media understanding is being performed via the tool.'
+              : null;
 
         const imagePayload = {
           document: { id: doc.id, filename: doc.filename, file_type: fileType },
@@ -446,25 +713,58 @@ function registerMediaProcessingTool() {
             metadata: vision.metadata,
           },
         };
-        return await writeProcessMediaCacheIfConfigured(workspacePath, doc, imagePayload);
+        return await writeProcessMediaCacheIfConfigured(workspacePath, doc, imagePayload, fileType);
       }
 
       if (String(fileType).startsWith('audio/')) {
-        const transcript = await MediaTranscriptionService.transcribeAudioWithWhisper(filePath);
+        let transcript;
+        try {
+          transcript = await transcribeAudioForAgent(sessionId, agentInfo, caps, filePath, instruction);
+        } catch (audioErr) {
+          logger.error(`process_media audio transcription failed: ${audioErr?.message || audioErr}`);
+          return {
+            error: `Audio transcription failed: ${audioErr?.message || audioErr}`,
+            document: { id: doc.id, filename: doc.filename, file_type: fileType },
+            agent_model: modelHint,
+          };
+        }
+
         const audioPayload = {
           document: { id: doc.id, filename: doc.filename, file_type: fileType },
           agent_model: modelHint,
+          warning: buildAudioTranscriptionWarning(transcript),
           result: {
             transcript: truncateString(transcript.text, max_output_chars),
             metadata: transcript.metadata,
           },
         };
-        return await writeProcessMediaCacheIfConfigured(workspacePath, doc, audioPayload);
+        return await writeProcessMediaCacheIfConfigured(workspacePath, doc, audioPayload, fileType);
       }
 
       if (String(fileType).startsWith('video/')) {
-        // 1) Transcribe
-        const transcript = await MediaTranscriptionService.transcribeVideoWithWhisper(filePath);
+        // 1) Transcribe audio track (routes to session Ollama or Whisper)
+        let transcript;
+        let tmpDir = null;
+        try {
+          const extracted = await MediaTranscriptionService.extractAudioFromVideoToWav(filePath);
+          tmpDir = extracted.tmpDir;
+          transcript = await transcribeAudioForAgent(sessionId, agentInfo, caps, extracted.wavPath, instruction);
+          transcript.metadata = { type: 'video', ...(transcript.metadata || {}) };
+        } catch (videoAudioErr) {
+          logger.error(`process_media video audio transcription failed: ${videoAudioErr?.message || videoAudioErr}`);
+          transcript = {
+            text: '',
+            metadata: { type: 'video', error: videoAudioErr?.message || String(videoAudioErr) },
+          };
+        } finally {
+          if (tmpDir) {
+            try {
+              await fsPromises.rm(tmpDir, { recursive: true, force: true });
+            } catch (e) {
+              logger.warn(`process_media video temp cleanup failed: ${e?.message || e}`);
+            }
+          }
+        }
 
         // 2) Sample frames and describe each
         let framesTmpDir = null;
@@ -481,19 +781,11 @@ function registerMediaProcessingTool() {
           const frameDescriptions = [];
           for (const framePath of frames) {
             let r;
-            if (agentInfo?.providerType === 'gemini' && caps?.vision) {
-              const model = agentInfo?.model || process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash';
-              r = await analyzeImageWithGemini(framePath, framePrompt, { model, maxTokens: 500 });
-            } else if (agentInfo?.providerType === 'kimi' && caps?.vision) {
-              const baseURL = agentInfo?.baseURL || process.env.KIMI_BASE_URL || process.env.MOONSHOT_BASE_URL;
-              const model = agentInfo?.model || process.env.KIMI_VISION_MODEL || 'kimi-k2-instruct';
-              r = await analyzeImageWithKimi(framePath, framePrompt, { baseURL, model, maxTokens: 500 });
-            } else if (agentInfo?.providerType === 'ollama' && caps?.vision) {
-              const baseURL = agentInfo?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-              const model = agentInfo?.model || process.env.OLLAMA_VISION_MODEL || 'qwen3-vl';
-              r = await analyzeImageWithOllama(framePath, framePrompt, { baseURL, model, maxTokens: 500 });
-            } else {
-              r = await analyzeImageWithOpenAI(framePath, framePrompt, { maxTokens: 500 });
+            try {
+              r = await analyzeImageForAgent(sessionId, agentInfo, caps, framePath, framePrompt, 500);
+            } catch (frameErr) {
+              logger.warn(`process_media video frame vision failed: ${frameErr?.message || frameErr}`);
+              r = { text: `[Frame description failed: ${frameErr?.message || frameErr}]` };
             }
             frameDescriptions.push({
               frame: path.basename(framePath),
@@ -502,7 +794,7 @@ function registerMediaProcessingTool() {
           }
 
           const warning =
-            caps && caps.vision === false
+            caps && caps.vision === false && !shouldUseOllamaVision(agentInfo, caps)
               ? 'Note: this agent model appears text-only; video frame understanding is being performed via the tool.'
               : null;
 
@@ -522,7 +814,7 @@ function registerMediaProcessingTool() {
               },
             },
           };
-          return await writeProcessMediaCacheIfConfigured(workspacePath, doc, videoPayload);
+          return await writeProcessMediaCacheIfConfigured(workspacePath, doc, videoPayload, fileType);
         } catch (e) {
           logger.warn(`process_media video processing failed: ${e?.message || e}`);
           return {
@@ -587,20 +879,7 @@ function registerMediaProcessingTool() {
             }
             let r;
             try {
-              if (agentInfo?.providerType === 'gemini' && caps?.vision) {
-                const model = agentInfo?.model || process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash';
-                r = await analyzeImageWithGemini(pagePath, pagePrompt, { model, maxTokens: 600 });
-              } else if (agentInfo?.providerType === 'kimi' && caps?.vision) {
-                const baseURL = agentInfo?.baseURL || process.env.KIMI_BASE_URL || process.env.MOONSHOT_BASE_URL;
-                const model = agentInfo?.model || process.env.KIMI_VISION_MODEL || 'kimi-k2-instruct';
-                r = await analyzeImageWithKimi(pagePath, pagePrompt, { baseURL, model, maxTokens: 600 });
-              } else if (agentInfo?.providerType === 'ollama' && caps?.vision) {
-                const baseURL = agentInfo?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-                const model = agentInfo?.model || process.env.OLLAMA_VISION_MODEL || 'qwen3-vl';
-                r = await analyzeImageWithOllama(pagePath, pagePrompt, { baseURL, model, maxTokens: 600 });
-              } else {
-                r = await analyzeImageWithOpenAI(pagePath, pagePrompt, { maxTokens: 600 });
-              }
+              r = await analyzeImageForAgent(sessionId, agentInfo, caps, pagePath, pagePrompt, 600);
             } catch (pageErr) {
               logger.warn(`process_media PDF page ${pageDescriptions.length + 1} vision failed: ${pageErr?.message || pageErr}`);
               r = { text: `[Page description failed: ${pageErr?.message || pageErr}]` };
@@ -655,7 +934,7 @@ function registerMediaProcessingTool() {
             },
           },
         };
-        return await writeProcessMediaCacheIfConfigured(workspacePath, doc, pdfPayload);
+        return await writeProcessMediaCacheIfConfigured(workspacePath, doc, pdfPayload, fileType);
       }
 
       return {

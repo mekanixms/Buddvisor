@@ -264,7 +264,7 @@ function mapApiToCapabilities(api, runtimeHints = null) {
     tagStr.includes('vision') ||
     tagStr.includes('image-to-text') ||
     tagStr.includes('multimodal') ||
-    /\bvl\b|llava|pixtral|qwen2-vl|qwen3-vl|internvl|smolvlm/.test(idLower);
+    /\bvl\b|llava|pixtral|qwen2-vl|qwen3-vl|internvl|smolvlm|gemma/.test(idLower);
 
   const audio =
     AUDIO_PIPELINES.has(pipeline) ||

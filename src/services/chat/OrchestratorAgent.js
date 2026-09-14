@@ -473,10 +473,11 @@ Summary:`;
       const { tools, allowedToolNames } = await this.buildToolsForAgent(session.id, agent.id);
       // Some providers/models (notably many Ollama vision/VL models) don't accept the `tools` field at all.
       // If the provider explicitly indicates it doesn't support tools, avoid passing tools to prevent 400s.
-      const providerTools = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools())
+      const agentModel = provider?.model || null;
+      const providerTools = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel))
         ? []
         : tools;
-      const providerAllowedToolNames = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools())
+      const providerAllowedToolNames = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel))
         ? []
         : allowedToolNames;
 
@@ -596,10 +597,11 @@ Summary:`;
 
             logger.info(`=== AGENT PROMPT: ${agent.name} (${agent.role}) ===`);
             const { tools, allowedToolNames } = await this.buildToolsForAgent(session.id, agent.id);
-            const providerTools = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools())
+            const agentModel = provider?.model || null;
+            const providerTools = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel))
               ? []
               : tools;
-            const providerAllowedToolNames = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools())
+            const providerAllowedToolNames = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel))
               ? []
               : allowedToolNames;
             const toolsLine = (providerTools && providerTools.length > 0) ? '\nTools: ' + providerTools.map(t => t.name).join(', ') : '';
@@ -1077,7 +1079,8 @@ ${agentJsonList}
     const systemPrompt = this.buildAgentSystemPrompt(agent, allAgents, documentContext, null, processedMediaCacheInfo, session);
 
     const { tools, allowedToolNames } = await this.buildToolsForAgent(session.id, agent.id);
-    const providerSupportsTools = !(provider && typeof provider.supportsTools === 'function' && !provider.supportsTools());
+    const agentModel = provider?.model || null;
+    const providerSupportsTools = !(provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel));
     const providerTools = providerSupportsTools ? tools : [];
     const providerAllowedToolNames = providerSupportsTools ? allowedToolNames : [];
 

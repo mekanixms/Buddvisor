@@ -491,12 +491,20 @@ class AgentManager {
         m.includes('vl') ||
         m.includes('vision') ||
         m.includes('llava') ||
-        m.includes('moondream');
+        m.includes('moondream') ||
+        m.includes('gemma') ||
+        m.includes('minicpm-v') ||
+        m.includes('bakllava') ||
+        m.includes('cogvlm') ||
+        m.includes('pixtral') ||
+        m.includes('llama3.2-vision') ||
+        m.includes('granite3.2-vision');
     } else if (t === 'kimi') vision = m.includes('k2');
+    const audio = t === 'ollama' && (m.includes('gemma') || m.includes('qwen2-audio') || m.includes('qwen-audio'));
     return {
       text: true,
       vision,
-      audio: false,
+      audio,
       video: false,
       thinking: false,
       prompt_caching_hint: false,

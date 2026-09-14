@@ -178,18 +178,19 @@ class GeminiProvider extends BaseLLMProvider {
           });
         }
       } else if (msg.role === 'tool') {
-        // Tool result - add as function response
-        history.push({
-          role: 'function',
-          parts: [{
-            functionResponse: {
-              name: msg.tool_name || 'unknown',
-              response: typeof msg.content === 'string' 
-                ? JSON.parse(msg.content) 
-                : msg.content,
-            },
-          }],
-        });
+        // Gemini 3.x rejects role "function"; tool results are a user turn with functionResponse parts.
+        const part = {
+          functionResponse: {
+            name: msg.tool_name || 'unknown',
+            response: this._functionResponsePayload(msg.content),
+          },
+        };
+        const last = history[history.length - 1];
+        if (last && last.role === 'user' && Array.isArray(last.parts) && last.parts.every(p => p.functionResponse)) {
+          last.parts.push(part);
+        } else {
+          history.push({ role: 'user', parts: [part] });
+        }
       } else {
         // User message
         history.push({
@@ -200,6 +201,66 @@ class GeminiProvider extends BaseLLMProvider {
     }
 
     return { history, systemInstruction };
+  }
+
+  /**
+   * Gemini functionResponse.response must be a JSON object.
+   */
+  _functionResponsePayload(content) {
+    let payload = content;
+    if (typeof content === 'string') {
+      try {
+        payload = JSON.parse(content);
+      } catch {
+        payload = { result: content };
+      }
+    }
+    if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) {
+      return { result: payload };
+    }
+    return payload;
+  }
+
+  /**
+   * Build a GenerativeModel and contents array for generateContent.
+   * Avoids startChat/sendMessage: the old SDK hardcodes role "function" for
+   * functionResponse parts, which Gemini 3.x rejects.
+   */
+  _buildGenerativeRequest(messages, options = {}) {
+    const { history, systemInstruction } = this.formatMessages(messages);
+    while (history.length > 0 && history[0].role !== 'user') {
+      history.shift();
+    }
+    if (history.length === 0) {
+      throw new Error('No messages to send');
+    }
+
+    const modelConfig = {
+      model: options.model || this.model,
+      generationConfig: {
+        ...this.generationConfig,
+        maxOutputTokens: options.maxTokens || this.maxTokens,
+      },
+    };
+    if (options.temperature !== undefined) {
+      modelConfig.generationConfig.temperature = options.temperature;
+    }
+    if (systemInstruction) {
+      modelConfig.systemInstruction = systemInstruction;
+    }
+    if (options.tools && options.tools.length > 0) {
+      modelConfig.tools = this.formatTools(options.tools);
+      modelConfig.toolConfig = {
+        functionCallingConfig: {
+          mode: FunctionCallingMode.AUTO,
+        },
+      };
+    }
+
+    return {
+      model: this.genAI.getGenerativeModel(modelConfig),
+      contents: history,
+    };
   }
 
   /**
@@ -266,66 +327,13 @@ class GeminiProvider extends BaseLLMProvider {
    * Send a chat completion request to Gemini
    */
   async chat(messages, options = {}) {
-    const { history, systemInstruction } = this.formatMessages(messages);
-
     try {
       logger.debug(`Gemini request: model=${options.model || this.model}, tools=${options.tools?.length || 0}`);
 
-      const modelConfig = {
-        model: options.model || this.model,
-      };
-
-      if (systemInstruction) {
-        modelConfig.systemInstruction = systemInstruction;
-      }
-
-      // Add tools if provided
-      if (options.tools && options.tools.length > 0) {
-        modelConfig.tools = this.formatTools(options.tools);
-        modelConfig.toolConfig = {
-          functionCallingConfig: {
-            mode: FunctionCallingMode.AUTO,
-          },
-        };
-      }
-
-      const model = this.genAI.getGenerativeModel(modelConfig);
-
-      // Get the last message (the one we will send)
-      const lastMessage = history.pop();
-      if (!lastMessage) {
-        throw new Error('No messages to send');
-      }
-
-      // Gemini requires the first content in the conversation to have role 'user'.
-      // Strip leading model/function turns so history either is empty or starts with user.
-      while (history.length > 0 && history[0].role !== 'user') {
-        history.shift();
-      }
-
-      const generationConfig = {
-        ...this.generationConfig,
-        maxOutputTokens: options.maxTokens || this.maxTokens,
-      };
-
-      if (options.temperature !== undefined) {
-        generationConfig.temperature = options.temperature;
-      }
-
-      const chat = model.startChat({
-        history,
-        generationConfig,
-      });
+      const { model, contents } = this._buildGenerativeRequest(messages, options);
 
       const result = await this.withRetry(async () => {
-        // Send the last message content
-        const messageContent = lastMessage.parts.map(p => {
-          if (p.text) return p.text;
-          if (p.functionResponse) return p;
-          return '';
-        }).filter(Boolean);
-        
-        return await chat.sendMessage(messageContent);
+        return await model.generateContent({ contents });
       });
 
       const parsed = this.parseResponse(result);
@@ -342,65 +350,11 @@ class GeminiProvider extends BaseLLMProvider {
    * Send a streaming chat completion request to Gemini
    */
   async streamChat(messages, onChunk, options = {}) {
-    const { history, systemInstruction } = this.formatMessages(messages);
-
     try {
       logger.debug(`Gemini stream request: model=${options.model || this.model}, tools=${options.tools?.length || 0}`);
 
-      const modelConfig = {
-        model: options.model || this.model,
-      };
-
-      if (systemInstruction) {
-        modelConfig.systemInstruction = systemInstruction;
-      }
-
-      // Add tools if provided
-      if (options.tools && options.tools.length > 0) {
-        modelConfig.tools = this.formatTools(options.tools);
-        modelConfig.toolConfig = {
-          functionCallingConfig: {
-            mode: FunctionCallingMode.AUTO,
-          },
-        };
-      }
-
-      const model = this.genAI.getGenerativeModel(modelConfig);
-
-      // Get the last message (the one we will send)
-      const lastMessage = history.pop();
-      if (!lastMessage) {
-        throw new Error('No messages to send');
-      }
-
-      // Gemini requires the first content in the conversation to have role 'user'.
-      // Strip leading model/function turns so history either is empty or starts with user.
-      while (history.length > 0 && history[0].role !== 'user') {
-        history.shift();
-      }
-
-      const generationConfig = {
-        ...this.generationConfig,
-        maxOutputTokens: options.maxTokens || this.maxTokens,
-      };
-
-      if (options.temperature !== undefined) {
-        generationConfig.temperature = options.temperature;
-      }
-
-      const chat = model.startChat({
-        history,
-        generationConfig,
-      });
-
-      // Send the last message content
-      const messageContent = lastMessage.parts.map(p => {
-        if (p.text) return p.text;
-        if (p.functionResponse) return p;
-        return '';
-      }).filter(Boolean);
-
-      const result = await chat.sendMessageStream(messageContent);
+      const { model, contents } = this._buildGenerativeRequest(messages, options);
+      const result = await model.generateContentStream({ contents });
 
       let fullContent = '';
       const toolCalls = [];

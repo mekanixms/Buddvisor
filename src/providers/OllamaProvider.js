@@ -289,6 +289,10 @@ class OllamaProvider extends BaseLLMProvider {
 
   /**
    * Flatten a tool-result message to plain text.
+   * Must be a user-side turn: llama.cpp (Ollama backend for Granite 4.x thinking
+   * models) treats a trailing assistant message as prefill and returns 400 if
+   * the list ends with 2+ assistant messages. Tool results as assistant would
+   * sit after the tool-call assistant message and trigger that error.
    */
   _flattenToolResultMessage(msg) {
     const toolName = msg.tool_name || msg.name || '';
@@ -296,7 +300,43 @@ class OllamaProvider extends BaseLLMProvider {
     const maxLen = 4000;
     if (contentStr.length > maxLen) contentStr = contentStr.slice(0, maxLen) + '… [trimmed]';
     const label = toolName ? `[Tool result (${toolName}): ${contentStr}]` : `[Tool result: ${contentStr}]`;
-    return { role: 'assistant', content: label };
+    return { role: 'user', content: label };
+  }
+
+  /**
+   * Merge consecutive same-role messages so the payload never ends with two
+   * assistant turns (llama.cpp: "Cannot have 2 or more assistant messages at
+   * the end of the list."). Also collapses multi-agent history where several
+   * assistants spoke in a row (conversation/brainstorming mode).
+   */
+  _sanitizeMessageSequence(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+    const merged = [];
+    for (const msg of messages) {
+      const role = String(msg?.role || 'user').toLowerCase();
+      const content = typeof msg.content === 'string' ? msg.content : (msg.content != null ? String(msg.content) : '');
+      const last = merged[merged.length - 1];
+      if (last && last.role === role) {
+        last.content = last.content && content ? `${last.content}\n\n${content}` : (last.content || content);
+        continue;
+      }
+      merged.push({ ...msg, role, content });
+    }
+
+    while (
+      merged.length >= 2 &&
+      merged[merged.length - 1].role === 'assistant' &&
+      merged[merged.length - 2].role === 'assistant'
+    ) {
+      const last = merged.pop();
+      const prev = merged[merged.length - 1];
+      prev.content = prev.content && last.content
+        ? `${prev.content}\n\n${last.content}`
+        : (prev.content || last.content);
+    }
+
+    return merged;
   }
 
   /**
@@ -341,10 +381,11 @@ class OllamaProvider extends BaseLLMProvider {
   /**
    * Format messages from standard format to Ollama's format.
    * Tool_calls and tool-result messages are flattened to plain text to keep
-   * the request payload simple and avoid deeply nested JSON.
+   * the request payload simple and avoid deeply nested JSON. Consecutive
+   * same-role messages are then merged so Granite/llama.cpp will accept the list.
    */
   formatMessages(messages) {
-    return messages.map(msg => {
+    const formatted = messages.map(msg => {
       if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
         return this._flattenToolCallsMessage(msg);
       }
@@ -360,6 +401,7 @@ class OllamaProvider extends BaseLLMProvider {
         content: contentStr,
       };
     });
+    return this._sanitizeMessageSequence(formatted);
   }
 
   /**

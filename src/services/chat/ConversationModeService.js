@@ -394,9 +394,16 @@ Guidelines:
         content: m.agent_name ? `[${m.agent_name}]: ${m.content}` : m.content,
       }));
 
+      // End with a user turn so the list does not finish on consecutive assistant
+      // messages. llama.cpp (Granite 4.x thinking on Ollama) returns 400 for that,
+      // and a single trailing assistant is treated as prefill of the previous agent.
       const messages = [
         { role: 'system', content: systemPrompt },
         ...formattedContext,
+        {
+          role: 'user',
+          content: `[Conversation turn] ${agent.name}, it is your turn to contribute to the brainstorming session.`,
+        },
       ];
 
       const mode = onChunk ? 'stream' : 'chat';
@@ -405,10 +412,11 @@ Guidelines:
       const tools = allowedToolNames
         ? toolRegistry.getToolDefinitionsForLLM(allowedToolNames)
         : toolRegistry.getToolDefinitionsForLLM();
-      const providerTools = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools())
+      const agentModel = provider?.model || null;
+      const providerTools = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel))
         ? []
         : tools;
-      const providerAllowedToolNames = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools())
+      const providerAllowedToolNames = (provider && typeof provider.supportsTools === 'function' && !provider.supportsTools(agentModel))
         ? []
         : allowedToolNames;
       const toolsLine = (providerTools && providerTools.length > 0) ? '\nTools: ' + providerTools.map(t => t.name).join(', ') : '';

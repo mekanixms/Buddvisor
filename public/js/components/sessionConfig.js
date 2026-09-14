@@ -1226,12 +1226,23 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         model.includes('vl') ||
         model.includes('vision') ||
         model.includes('llava') ||
-        model.includes('moondream');
+        model.includes('moondream') ||
+        model.includes('gemma') ||
+        model.includes('minicpm-v') ||
+        model.includes('bakllava') ||
+        model.includes('cogvlm') ||
+        model.includes('pixtral') ||
+        model.includes('llama3.2-vision') ||
+        model.includes('granite3.2-vision');
     } else if (providerType === 'kimi') {
       vision = model.includes('k2');
     }
 
-    return { vision, audio: false, video: false, text: true, thinking: false, prompt_caching_hint: false };
+    const audio =
+      providerType === 'ollama' &&
+      (model.includes('gemma') || model.includes('qwen2-audio') || model.includes('qwen-audio'));
+
+    return { vision, audio, video: false, text: true, thinking: false, prompt_caching_hint: false };
   }
 
   /**
