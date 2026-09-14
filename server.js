@@ -18,6 +18,7 @@ const { registerSqliteLocalDbTool, cleanupAllDatabases } = require('./src/servic
 const { registerLocalWorkingFolderTool } = require('./src/services/tools/localWorkingFolderTool');
 const { registerWorkspaceExecTool } = require('./src/services/tools/workspaceExecTool');
 const { registerStatePersistTool, stopCleanupInterval } = require('./src/services/tools/statePersistTool');
+const { registerDatetimeTool } = require('./src/services/tools/datetimeTool');
 const { registerSessionPoolTool, stopCleanupInterval: stopSessionPoolCleanupInterval } = require('./src/services/tools/sessionPoolTool');
 const { registerEfApiTool } = require('./src/services/tools/efApiTool');
 const { registerOpenMemoryTool } = require('./src/services/tools/openMemoryTool');
@@ -153,6 +154,7 @@ registerSqliteLocalDbTool();
 registerLocalWorkingFolderTool();
 registerWorkspaceExecTool();
 registerStatePersistTool();
+registerDatetimeTool();
 registerSessionPoolTool();
 registerEfApiTool();
 registerOpenMemoryTool();

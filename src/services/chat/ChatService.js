@@ -13,6 +13,7 @@ const Document = require('../../models/Document');
 const { toolExecutor } = require('../tools/ToolExecutor');
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
 const logger = require('../../utils/logger');
+const { expandPromptMacros } = require('../../utils/promptMacros');
 
 /**
  * Ensure assistant message content is a string. Some LLM providers may return
@@ -528,10 +529,14 @@ class ChatService {
       model,
     });
 
-    const systemPrompt = `You are a helpful assistant for a small multi agent AI application.
+    const systemPrompt = expandPromptMacros(`You are a helpful assistant for a small multi agent AI application.
 ${documentContext ? `Use the following document context to help answer questions:\n${documentContext}` : ''}
 
-Provide clear, accurate responses. If you're unsure about something, say so.`;
+Provide clear, accurate responses. If you're unsure about something, say so.`, {
+      session,
+      provider: providerType,
+      model,
+    });
 
     const ContextManager = require('../sessions/ContextManager');
     const documentsSuffix = ContextManager.buildDocumentsSectionForOrchestrator(session) || '';

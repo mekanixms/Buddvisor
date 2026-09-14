@@ -236,6 +236,27 @@ class SessionConfig {
                           <li>Resources (cached files) and how to use them</li>
                           <li>Agent roles and when to use each one</li>
                         </ul>
+                        <div class="mt-2"><strong>Macros</strong> (expanded on each request):
+                          <code>{%datetime%}</code>,
+                          <code>{%datetime(YYYY-MM-DD HH:mm)%}</code>,
+                          <code>{%datetime(YYDDMM-HH:mm)%}</code>,
+                          <code>{%datetime(YYYY-MM-DD HH:mm, Europe/Bucharest)%}</code>,
+                          <code>{%date%}</code>
+                          <code>{%time%}</code>
+                          <code>{%iso_datetime%}</code>
+                          <code>{%unix%}</code>
+                          <code>{%timezone%}</code>
+                          <code>{%weekday%}</code>
+                          <code>{%model%}</code>
+                          <code>{%provider%}</code>
+                          <code>{%agent_name%}</code>
+                          <code>{%session_name%}</code>
+                          <code>{%session_id%}</code>
+                          <code>{%orchestration_mode%}</code>
+                          <code>{%tools%}</code>
+                          <code>{%user_id%}</code>.
+                          Format tokens: YYYY YY MM DD HH mm ss dddd ddd tz.
+                        </div>
                       </div>
                     </div>
                     <div class="mb-3">
@@ -1318,6 +1339,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                 <div class="form-text mb-2">
                   This context is specific to this session and includes team members, assigned tools, and documents.
                   Edit this to customize how the agent behaves in this session.
+                  Macros such as <code>{%datetime(YYYY-MM-DD HH:mm)%}</code>, <code>{%model%}</code>, <code>{%provider%}</code>, <code>{%agent_name%}</code>, <code>{%session_name%}</code>, and <code>{%tools%}</code> are expanded on each request.
                 </div>
                 <textarea class="form-control font-monospace" id="agent-session-context"
                           style="flex: 1; resize: none; min-height: 200px;"

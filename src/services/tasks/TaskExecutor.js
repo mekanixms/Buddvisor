@@ -11,6 +11,7 @@ const { TaskService } = require('./TaskService');
 const WorkSession = require('../../models/WorkSession');
 const Message = require('../../models/Message');
 const logger = require('../../utils/logger');
+const { expandPromptMacros } = require('../../utils/promptMacros');
 
 class TaskExecutor {
   constructor() {
@@ -317,7 +318,7 @@ class TaskExecutor {
     const roleDescription = this.getRoleDescription(agent.role);
     const basePrompt = agent.system_prompt || this.getDefaultSystemPrompt(agent.role);
 
-    return `${basePrompt}
+    return expandPromptMacros(`${basePrompt}
 
 --- Your Identity ---
 Your name is: ${agent.name}
@@ -336,7 +337,10 @@ You are working on a formal task that requires a comprehensive, well-structured 
 
 ${documentContext ? `\n--- Relevant Document Context ---\n${documentContext}\n--- End Document Context ---\n` : ''}
 
-Please provide a thorough analysis and recommendations for the following task. Structure your response with clear sections and actionable items where appropriate.`;
+Please provide a thorough analysis and recommendations for the following task. Structure your response with clear sections and actionable items where appropriate.`, {
+      agent,
+      session: { id: task.session_id, user_id: task.user_id },
+    });
   }
 
   /**

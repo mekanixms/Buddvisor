@@ -3,6 +3,7 @@ const WorkSession = require('../../models/WorkSession');
 const { toolRegistry } = require('../tools/ToolRegistry');
 const logger = require('../../utils/logger');
 const promptsLogger = logger.promptsLogger;
+const { expandPromptMacros } = require('../../utils/promptMacros');
 
 class ContextManager {
   /**
@@ -140,7 +141,10 @@ class ContextManager {
 
     logger.info('ContextManager: built system prompt');
     promptsLogger.info('\n\n=== CONTEXT MANAGER SYSTEM PROMPT ===\n' + prompt);
-    return prompt;
+    return expandPromptMacros(prompt, {
+      session,
+      tools: session.orchestrator_tools || [],
+    });
   }
 
   /**

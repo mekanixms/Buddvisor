@@ -49,6 +49,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Local Working Folder Tool**: Agents can manage files and directories in isolated workspaces via `local_working_folder`
 - **Workspace Execution Tool**: Agents can execute shell commands within their workspace via `workspace_exec`
 - **State Persistence Tool**: Fast in-memory key-value storage for session variables via `state_persist`
+- **Datetime Tool**: Current date/time (optional format and timezone) via `datetime`
 - **Archived Conversation History Tool**: Read and export conversation history with filtering, chunking, and export capabilities via `archived_conversation_history`
 - **Interactive HTML/JS Artifacts**: Agents can create visualizations, charts, and interactive content rendered in iframes
 - **Multiple LLM Providers**: Claude, OpenAI, Gemini, DeepSeek, Qwen, Granite (cloud) + Ollama (local)
@@ -405,7 +406,7 @@ You can restrict which tools appear in the **Tools view** (`nav-tools`) and **Co
 ```env
 # Comma-separated list of tool names. Only these tools are shown in the UI.
 # If empty or not set, all registered tools are shown.
-ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,state_persist,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule,calculate_depreciation,categorize_business_expense,calculate_business_ratios,convert_currency
+ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,state_persist,datetime,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule,calculate_depreciation,categorize_business_expense,calculate_business_ratios,convert_currency
 ```
 
 - **Empty or unset:** All registered tools are shown (default behavior).
@@ -671,6 +672,38 @@ Run script with custom environment:
 
 - All commands are automatically logged to `./logs/exec_history.log` in the workspace
 - Logs include timestamp, command, exit code, duration, and output snippets
+
+### Agent Tool: `datetime` (Current Date/Time)
+
+Agents can read the current date and time without `web_search` or `workspace_exec`.
+
+**Configuration:** assign `datetime` in **Configure Session → Tools** (checkbox).
+
+**Parameters:**
+
+- **`format`** _(optional)_: tokens `YYYY` `YY` `MM` `DD` `HH` `mm` `ss` `dddd` `ddd` `tz`. Example: `YYDDMM-HH:mm`
+- **`timezone`** _(optional)_: IANA name such as `Europe/Bucharest` or `UTC`. Defaults to the server timezone (`APP_TIMEZONE` / `TZ`).
+
+**Returns:** `iso`, `formatted`, `date`, `time`, `weekday`, `unix`, `timezone`.
+
+### System prompt macros
+
+Orchestrator Initial Context and agent session/initial context can include `{%macro%}` tokens. They are expanded **on each request** (not stored expanded).
+
+| Macro | Example result |
+|---|---|
+| `{%datetime%}` | `2026-09-14T20:49:00+03:00` |
+| `{%datetime(YYYY-MM-DD HH:mm)%}` | `2026-09-14 20:49` |
+| `{%datetime(YYDDMM-HH:mm)%}` | `261409-20:49` |
+| `{%datetime(YYYY-MM-DD HH:mm, Europe/Bucharest)%}` | format + timezone |
+| `{%date%}` `{%time%}` `{%iso_datetime%}` `{%unix%}` `{%timezone%}` `{%weekday%}` | calendar parts |
+| `{%year%}` `{%month%}` `{%day%}` | `2026` / `09` / `14` |
+| `{%model%}` `{%provider%}` | this caller’s LLM |
+| `{%agent_name%}` `{%agent_role%}` `{%agent_id%}` | Orchestrator when used on the lead prompt |
+| `{%session_name%}` `{%session_id%}` `{%orchestration_mode%}` | session fields |
+| `{%user_id%}` `{%tools%}` | owner id; comma-separated assigned tools |
+
+Unknown macros are left unchanged.
 
 ### Agent Tool: `state_persist` (In-Memory Key-Value Storage)
 

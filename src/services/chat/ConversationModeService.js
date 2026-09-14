@@ -14,6 +14,7 @@ const { syncAssignedDocumentsToWorkspace } = require('../tools/localWorkingFolde
 const { decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const promptsLogger = logger.promptsLogger;
+const { expandPromptMacros } = require('../../utils/promptMacros');
 
 class ConversationModeService {
   constructor() {
@@ -356,12 +357,14 @@ Respond in JSON format ONLY:
       await syncAssignedDocumentsToWorkspace(state.sessionId, agent.id);
 
       const provider = await AgentService.getAgentProvider(agent.id, state.userId);
+      const allowedToolNames = await OrchestratorAgent.getAllowedToolNamesForAgent(state.sessionId, agent.id);
+      const session = await WorkSession.findById(state.sessionId);
 
       const teamMembersSection = state.agents && state.agents.length > 1
         ? `\n\n--- Team Members ---\nYou are part of a team of specialized agents. Here are your team members you can collaborate with:\n\n${this.buildAgentJsonList_forAgents(state.agents)}\n\nYou can reference these team members when their expertise would be helpful, or when the topic spans multiple areas of expertise.\n--- End Team Members ---`
         : '';
 
-      const systemPrompt = `${agent.initial_context || `You are a ${agent.role} specialist.`}
+      const systemPromptRaw = `${agent.initial_context || `You are a ${agent.role} specialist.`}
 
 --- Your Identity ---
 Your name is: ${agent.name}
@@ -388,6 +391,15 @@ Guidelines:
 - Add new perspectives or develop existing ideas further
 - Avoid repeating points already made`;
 
+      const systemPrompt = expandPromptMacros(systemPromptRaw, {
+        session,
+        agent,
+        tools: allowedToolNames || [],
+        userId: state.userId,
+        provider: provider?.getType?.() || agent.provider_type,
+        model: provider?.model,
+      });
+
       // Format context messages for the agent
       const formattedContext = context.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
@@ -407,8 +419,6 @@ Guidelines:
       ];
 
       const mode = onChunk ? 'stream' : 'chat';
-      // Respect per-agent tool assignments if configured for this session
-      const allowedToolNames = await OrchestratorAgent.getAllowedToolNamesForAgent(state.sessionId, agent.id);
       const tools = allowedToolNames
         ? toolRegistry.getToolDefinitionsForLLM(allowedToolNames)
         : toolRegistry.getToolDefinitionsForLLM();

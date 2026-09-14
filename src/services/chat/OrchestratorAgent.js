@@ -15,6 +15,7 @@ const { decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const promptsLogger = logger.promptsLogger;
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
+const { expandPromptMacros } = require('../../utils/promptMacros');
 
 /**
  * Generate a stable UUID-like conversation ID for prompt caching (e.g. xAI x-grok-conv-id).
@@ -278,7 +279,7 @@ class OrchestratorAgent {
       : '';
 
     return {
-      system: `You are a routing orchestrator for a multi-agent advisor system. Your job is to analyze user requests and determine which specialist agent(s) should handle them.${initialContext}
+      system: expandPromptMacros(`You are a routing orchestrator for a multi-agent advisor system. Your job is to analyze user requests and determine which specialist agent(s) should handle them.${initialContext}
 
 Available agents:
 ${agentList}
@@ -299,7 +300,10 @@ Rules:
 - Use "direct" when the request is general and doesn't need specialist knowledge
 - Always include the agent IDs as numbers in an array
 - Be concise in your reasoning
-- Consider the application context when making routing decisions`,
+- Consider the application context when making routing decisions`, {
+        session,
+        tools: session.orchestrator_tools || [],
+      }),
 
       user: `User request: "${userMessage}"
 ${documentContext ? `\nRelevant document context is available.` : ''}
@@ -728,12 +732,17 @@ Summary:`;
       ? `\n\n## Available Tools\n\nYou have access to the following tools. Use them when appropriate:\n${tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}`
       : '';
 
-    const systemPrompt = `You are a helpful assistant for a small multi agent AI application. Provide clear, accurate, and practical advice.${initialContext}${agentSummary}
+    const systemPrompt = expandPromptMacros(`You are a helpful assistant for a small multi agent AI application. Provide clear, accurate, and practical advice.${initialContext}${agentSummary}
 
 Agent Details (JSON):
 ${agentJsonList}
 ${toolSummary}
-${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`;
+${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`, {
+      session,
+      provider: providerType,
+      model,
+      tools: orchestratorToolNames,
+    });
 
     const ContextManager = require('../sessions/ContextManager');
     const documentsSuffix = ContextManager.buildDocumentsSectionForOrchestrator(session) || '';
@@ -987,7 +996,7 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
       ? `\n\n## Your Own Tools\n\nBesides delegation, you have direct access to the following tools. Use them when appropriate:\n${orchestratorTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}`
       : '';
 
-    const systemPrompt = `You are the lead agent (orchestrator) of a multi-agent advisory team. You are the only team member who sees the full conversation history, and you are responsible for the final answer to the user.${initialContext}
+    const systemPrompt = expandPromptMacros(`You are the lead agent (orchestrator) of a multi-agent advisory team. You are the only team member who sees the full conversation history, and you are responsible for the final answer to the user.${initialContext}
 
 ## Your Team
 
@@ -1006,7 +1015,12 @@ ${agentJsonList}
 - You may delegate to multiple agents and you may send follow-up delegations based on earlier results, up to ${maxDelegations} delegations per user turn.
 - When tasks are independent, issue multiple delegate_to_agent calls in the SAME response: they will run in parallel, which is faster. Use sequential follow-up delegations only when one result depends on another.
 - Past assistant messages in the conversation history may include "[Specialist results behind this answer]" blocks with what each agent previously reported. Reuse those results instead of re-delegating identical tasks.
-- After gathering the results you need, write the final answer to the user yourself, synthesizing and reconciling the agents' contributions. Do not just paste raw agent output: integrate it.${toolSummary}${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`;
+- After gathering the results you need, write the final answer to the user yourself, synthesizing and reconciling the agents' contributions. Do not just paste raw agent output: integrate it.${toolSummary}${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`, {
+      session,
+      provider: providerType,
+      model,
+      tools: orchestratorToolNames,
+    });
 
     const ContextManager = require('../sessions/ContextManager');
     const documentsSuffix = ContextManager.buildDocumentsSectionForOrchestrator(session) || '';
@@ -1346,6 +1360,11 @@ ${agentJsonList}
       ? '\n\nWhen local_working_folder is configured, assigned documents are also symlinked in your workspace under assigned_documents/; use list_dir or read_file to access them.'
       : '';
 
+    const agentTools = session
+      ? require('../sessions/ContextManager').getAgentTools(agent.id, session)
+      : [];
+    const expand = (text) => expandPromptMacros(text, { session, agent, tools: agentTools });
+
     // Check if agent has session-specific context (set via Configure Session)
     if (agent.session_context) {
       // Session context already includes identity, team members, tools
@@ -1359,7 +1378,7 @@ ${agentJsonList}
         ? `\n\n--- Relevant Document Context ---\n${documentContext}\n--- End Document Context ---\nUse this context when relevant to the user's question.`
         : '';
 
-      return `${prompt}${summarySection}${docSection}${processedMediaSection}${assignedDocsSymlinkNote}`;
+      return expand(`${prompt}${summarySection}${docSection}${processedMediaSection}${assignedDocsSymlinkNote}`);
     }
 
     // Fallback to old behavior for backwards compatibility
@@ -1383,7 +1402,7 @@ ${agentJsonList}
       ? `\n\n--- Relevant Document Context ---\n${documentContext}\n--- End Document Context ---\nUse this context when relevant to the user's question.`
       : '';
 
-    return `${basePrompt}${nameSection}${teamMembersSection}${orchestratorSection}${summarySection}${docSection}${processedMediaSection}${assignedDocsSymlinkNote}`;
+    return expand(`${basePrompt}${nameSection}${teamMembersSection}${orchestratorSection}${summarySection}${docSection}${processedMediaSection}${assignedDocsSymlinkNote}`);
   }
 
   /**
