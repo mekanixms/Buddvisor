@@ -10,6 +10,7 @@ const ContextManager = require('../services/sessions/ContextManager');
 const WorkSession = require('../models/WorkSession');
 const SessionScheduledJob = require('../models/SessionScheduledJob');
 const { getPoolDumpForSession } = require('../services/tools/sessionPoolTool');
+const sessionStorageRoutes = require('./sessionStorage.routes');
 
 // All session routes require authentication
 router.use(authenticate);
@@ -55,6 +56,9 @@ router.get('/scheduled-jobs', [
 
 // In share mode, restrict access to the shared session only
 router.use('/:id', restrictToShareSession('id'));
+
+// Session storage file explorer (blocked in share mode inside the sub-router)
+router.use('/:id/storage', sessionStorageRoutes);
 
 /**
  * GET /api/sessions

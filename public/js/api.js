@@ -274,6 +274,70 @@ class APIClient {
 
     getPoolDump: (sessionId) =>
       this.get(`/sessions/${sessionId}/pool-dump`),
+
+    listStorage: (sessionId, storagePath = '') =>
+      this.get(`/sessions/${sessionId}/storage?path=${encodeURIComponent(storagePath || '')}`),
+
+    mkdirStorage: (sessionId, storagePath, name) =>
+      this.post(`/sessions/${sessionId}/storage/mkdir`, { path: storagePath || '', name }),
+
+    deleteStorage: (sessionId, storagePath) =>
+      this.delete(`/sessions/${sessionId}/storage?path=${encodeURIComponent(storagePath || '')}`),
+
+    uploadStorage: async (sessionId, storagePath, files) => {
+      const formData = new FormData();
+      formData.append('path', storagePath || '');
+      const list = Array.isArray(files) ? files : [files];
+      for (const f of list) {
+        if (f) formData.append('file', f);
+      }
+      const token = this.getToken();
+      const response = await fetch(`${this.baseURL}/sessions/${sessionId}/storage/upload`, {
+        method: 'POST',
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+        body: formData,
+      });
+      if (response.status === 401) {
+        this.clearToken();
+        window.location.href = '/login.html';
+        throw new Error('Unauthorized');
+      }
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(result?.error?.message || `Upload failed (HTTP ${response.status})`);
+      }
+      return result;
+    },
+
+    fetchStorageFile: async (sessionId, storagePath, disposition = 'inline') => {
+      const token = this.getToken();
+      const url = `${this.baseURL}/sessions/${sessionId}/storage/file?path=${encodeURIComponent(storagePath || '')}&disposition=${encodeURIComponent(disposition)}`;
+      const response = await fetch(url, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+      if (response.status === 401) {
+        this.clearToken();
+        window.location.href = '/login.html';
+        throw new Error('Unauthorized');
+      }
+      if (!response.ok) {
+        let message = `Request failed (HTTP ${response.status})`;
+        try {
+          const result = await response.json();
+          if (result?.error?.message) message = result.error.message;
+        } catch {
+          // ignore
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      const contentType = response.headers.get('Content-Type') || blob.type || 'application/octet-stream';
+      return { blob, contentType };
+    },
   };
 
   // Chat API

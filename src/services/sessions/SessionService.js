@@ -478,7 +478,14 @@ class SessionService {
         throw new Error('No valid fields to update');
       }
 
+      const nameChanged =
+        allowedUpdates.name !== undefined && allowedUpdates.name !== session.name;
+
       const updatedSession = await WorkSession.update(sessionId, allowedUpdates);
+
+      if (nameChanged) {
+        await syncSessionStorageLinks(sessionId);
+      }
 
       logger.info(`Session updated: ${sessionId} (User: ${userId})`);
 
@@ -762,6 +769,8 @@ class SessionService {
 
       await WorkSession.replaceOrchestratorToolAssignments(sessionId, normalizedAssignments);
       logger.info(`Updated orchestrator tool assignments for session ${sessionId}: ${normalizedAssignments.length} tools`);
+
+      await syncSessionStorageLinks(sessionId);
     } catch (error) {
       logger.error('Error setting orchestrator tool assignments:', error);
       throw error;

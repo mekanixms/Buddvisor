@@ -123,6 +123,19 @@ class SessionManager {
     document.getElementById('current-session-desc').textContent =
       `${agentCount} agents • ${docCount} documents`;
 
+    const explorerBtn = document.getElementById('session-file-explorer-btn');
+    if (explorerBtn) {
+      const hasAssignmentLists =
+        Array.isArray(this.currentSession.tool_agent_assignments) ||
+        Array.isArray(this.currentSession.orchestrator_tool_assignments);
+      if (hasAssignmentLists && typeof SessionFileExplorer !== 'undefined') {
+        explorerBtn.classList.toggle(
+          'd-none',
+          !SessionFileExplorer.hasLocalWorkingFolder(this.currentSession)
+        );
+      }
+    }
+
     // Update pin button state
     this.updatePinButton();
   }

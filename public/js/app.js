@@ -119,7 +119,8 @@ function applyShareModeUI() {
   hide('[data-action="import-session"]');
   // Current session card: hide Pin, Delete, Configure, Duplicate, Export, Share
   hideSelf('#pin-session-btn');
-  hideSelf('#share-session-link-btn');
+    hideSelf('#share-session-link-btn');
+    hideSelf('#session-file-explorer-btn');
   hide('[data-action="delete-session-sidebar"]');
   hide('[data-action="configure-session"]');
   hide('[data-action="duplicate-session"]');
@@ -671,6 +672,12 @@ document.addEventListener('click', (e) => {
     case 'share-session-link':
       e.preventDefault();
       sessionManager.showShareLinkModal();
+      break;
+    case 'open-session-file-explorer':
+      e.preventDefault();
+      if (window.sessionFileExplorer) {
+        window.sessionFileExplorer.open();
+      }
       break;
     case 'clear-session':
       e.preventDefault();

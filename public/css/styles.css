@@ -586,3 +586,14 @@ body.dark-theme .tool-item:hover {
   background-color: #e0a800;
   color: #000 !important;
 }
+
+.sfe-preview-pane {
+  min-height: 16rem;
+  max-height: 50vh;
+  overflow: auto;
+}
+.sfe-preview-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 42vh;
+}
