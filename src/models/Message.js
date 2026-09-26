@@ -138,17 +138,21 @@ class Message {
    */
   static async getContextMessages(sessionId, contextLength = 50) {
     try {
-      // Get the most recent messages up to contextLength
+      // Last contextLength messages, then drop ones the user archived by hand.
+      // Older messages stay outside the window (they are not pulled in to fill the gap).
       const messages = await dbAll(
-        `SELECT * FROM messages
-         WHERE session_id = ?
-         ORDER BY created_at DESC
-         LIMIT ?`,
+        `SELECT * FROM (
+           SELECT * FROM messages
+           WHERE session_id = ?
+           ORDER BY created_at DESC
+           LIMIT ?
+         ) recent
+         WHERE COALESCE(archived, 0) = 0
+         ORDER BY created_at ASC`,
         [sessionId, contextLength]
       );
 
-      // Return in chronological order (oldest first)
-      return messages.reverse();
+      return messages;
     } catch (error) {
       logger.error('Error getting context messages:', error);
       throw error;
@@ -163,7 +167,7 @@ class Message {
    */
   static async update(id, updates) {
     try {
-      const allowedFields = ['content', 'tokens_used'];
+      const allowedFields = ['content', 'tokens_used', 'archived'];
       const updateFields = [];
       const values = [];
 
@@ -395,16 +399,19 @@ class Message {
   static async getContextForAgents(sessionId, limit = process.env.DEFAULT_MESSAGE_LIMIT_CONTEXT_LENGTH || 10) {
     try {
       const messages = await dbAll(
-        `SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at
-         FROM messages
-         WHERE session_id = ?
-         ORDER BY created_at DESC
-         LIMIT ?`,
+        `SELECT * FROM (
+           SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived
+           FROM messages
+           WHERE session_id = ?
+           ORDER BY created_at DESC
+           LIMIT ?
+         ) recent
+         WHERE COALESCE(archived, 0) = 0
+         ORDER BY created_at ASC`,
         [sessionId, limit]
       );
 
-      // Return in chronological order (oldest first) and parse each message
-      return messages.reverse().map(m => this.parseMessage(m));
+      return messages.map(m => this.parseMessage(m));
     } catch (error) {
       logger.error('Error getting context for agents:', error);
       throw error;
@@ -421,18 +428,21 @@ class Message {
    */
   static async getContextForAgent(sessionId, agentId, limit = process.env.DEFAULT_MESSAGE_LIMIT_CONTEXT_LENGTH || 10) {
     try {
-      // Get all user messages (agent_id is NULL) and this agent's messages
+      // User messages and this agent's messages, within the window, excluding manual archives.
       const messages = await dbAll(
-        `SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at
-         FROM messages
-         WHERE session_id = ? AND (agent_id IS NULL OR agent_id = ?)
-         ORDER BY created_at DESC
-         LIMIT ?`,
+        `SELECT * FROM (
+           SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived
+           FROM messages
+           WHERE session_id = ? AND (agent_id IS NULL OR agent_id = ?)
+           ORDER BY created_at DESC
+           LIMIT ?
+         ) recent
+         WHERE COALESCE(archived, 0) = 0
+         ORDER BY created_at ASC`,
         [sessionId, agentId, limit]
       );
 
-      // Return in chronological order (oldest first) and parse each message
-      return messages.reverse().map(m => this.parseMessage(m));
+      return messages.map(m => this.parseMessage(m));
     } catch (error) {
       logger.error('Error getting context for agent:', error);
       throw error;

@@ -162,6 +162,39 @@ class ConversationService {
   }
 
   /**
+   * Include or exclude a message from LLM context without deleting it.
+   * Archived messages stay in history and remain readable by the archive tool.
+   * @param {number} sessionId
+   * @param {number} userId
+   * @param {number} messageId
+   * @param {boolean} archived
+   * @returns {Promise<object>}
+   */
+  static async setMessageArchived(sessionId, userId, messageId, archived) {
+    try {
+      const session = await WorkSession.findById(sessionId);
+      if (!session) {
+        throw new Error('Session not found');
+      }
+      if (session.user_id !== userId) {
+        throw new Error('Unauthorized access to session');
+      }
+
+      const message = await Message.findById(messageId);
+      if (!message || message.session_id !== sessionId) {
+        throw new Error('Message not found in this session');
+      }
+
+      const updated = await Message.update(messageId, { archived: archived ? 1 : 0 });
+      logger.info(`Message ${messageId} ${archived ? 'archived' : 'restored'} in session ${sessionId}`);
+      return updated;
+    } catch (error) {
+      logger.error('Error updating message archive state:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Clear conversation history (delete all messages)
    * @param {number} sessionId - Session ID
    * @param {number} userId - User ID

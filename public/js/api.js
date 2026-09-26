@@ -448,6 +448,9 @@ class APIClient {
     deleteMessage: (sessionId, messageId) =>
       this.delete(`/chat/${sessionId}/messages/${messageId}`),
 
+    setMessageArchived: (sessionId, messageId, archived) =>
+      this.post(`/chat/${sessionId}/messages/${messageId}/archive`, { archived: !!archived }),
+
     clearHistory: (sessionId) =>
       this.post(`/chat/${sessionId}/clear`),
 

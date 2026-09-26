@@ -814,28 +814,30 @@ class ChatInterface {
     }
 
     // Determine which messages are in active context vs archived
-    // Active context = most recent context_length messages (default 50)
+    // Active context = most recent context_length messages (default 50).
+    // A message the user archived by hand is also out of context, even inside that window.
     const contextLength = this.currentSession.context_length || 50;
     const activeContextStartIndex = Math.max(0, this.messages.length - contextLength);
     let archivedBoundaryShown = false;
 
-    // Render messages with archived indicators
     const messagesHtml = this.messages.map((msg, index) => {
-      const isArchived = index < activeContextStartIndex;
+      const outsideContext = index < activeContextStartIndex;
+      const manuallyArchived = Number(msg.archived) === 1;
+      const isArchived = outsideContext || manuallyArchived;
 
-      // Add separator before first archived message
       let separator = '';
-      if (isArchived && !archivedBoundaryShown && activeContextStartIndex > 0) {
+      if (outsideContext && !archivedBoundaryShown && activeContextStartIndex > 0) {
         archivedBoundaryShown = true;
         separator = this.renderArchivedBoundary();
       }
 
-      return separator + this.renderMessage(msg, isArchived);
+      return separator + this.renderMessage(msg, isArchived, !outsideContext);
     }).join('');
 
     chatMessages.innerHTML = messagesHtml;
     this.attachArtifactHandlers();
     this.attachDeleteHandlers();
+    this.attachArchiveHandlers();
     this.attachCopyHandlers();
     this.attachBookmarkHandlers();
 
@@ -1083,6 +1085,39 @@ class ChatInterface {
   }
 
   /**
+   * Archive or restore a message in the active context window.
+   */
+  attachArchiveHandlers() {
+    document.querySelectorAll('.message-archive-btn[data-action="archive-message"], .message-archive-btn[data-action="unarchive-message"]').forEach(btn => {
+      const newBtn = btn.cloneNode(true);
+      btn.parentNode.replaceChild(newBtn, btn);
+
+      const handleArchive = async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const messageId = parseInt(newBtn.dataset.messageId, 10);
+        if (!messageId || !this.currentSession) return;
+
+        const archive = newBtn.dataset.action === 'archive-message';
+        try {
+          await api.chat.setMessageArchived(this.currentSession.id, messageId, archive);
+          const message = this.messages.find(msg => msg.id === messageId);
+          if (message) message.archived = archive ? 1 : 0;
+          this.renderMessages(false);
+          showToast(archive ? 'Message archived' : 'Message restored to context', 'success');
+        } catch (error) {
+          console.error('Error updating message archive state:', error);
+          showToast(error.message || 'Failed to update message', 'danger');
+        }
+      };
+
+      newBtn.addEventListener('click', handleArchive);
+      newBtn.addEventListener('touchend', handleArchive);
+    });
+  }
+
+  /**
    * Attach event handlers for message copy buttons
    */
   attachCopyHandlers() {
@@ -1175,11 +1210,44 @@ class ChatInterface {
   }
 
   /**
+   * Archive control for a message that is still inside the context window.
+   * Manually archived messages get a restore control instead.
+   */
+  renderArchiveButton(message, inActiveWindow) {
+    const messageId = Number(message.id);
+    if (!Number.isInteger(messageId) || messageId <= 0 || window.isShareMode) return '';
+
+    const manuallyArchived = Number(message.archived) === 1;
+    if (manuallyArchived) {
+      return `
+        <button class="message-archive-btn btn btn-sm ms-2 btn-light"
+                data-message-id="${messageId}"
+                data-action="unarchive-message"
+                style="border: 1px solid #dee2e6;"
+                title="Restore this message to agent context">
+          <i class="bi bi-arrow-counterclockwise"></i>
+        </button>
+      `;
+    }
+    if (!inActiveWindow) return '';
+    return `
+      <button class="message-archive-btn btn btn-sm ms-2 btn-light"
+              data-message-id="${messageId}"
+              data-action="archive-message"
+              style="border: 1px solid #dee2e6;"
+              title="Archive — leave this message out of agent context">
+        <i class="bi bi-archive"></i>
+      </button>
+    `;
+  }
+
+  /**
    * Render a single message
    * @param {object} message - Message object
-   * @param {boolean} isArchived - Whether this message is archived (not in active context)
+   * @param {boolean} isArchived - Whether this message is left out of agent context
+   * @param {boolean} inActiveWindow - Whether this message is inside the context-length window
    */
-  renderMessage(message, isArchived = false) {
+  renderMessage(message, isArchived = false, inActiveWindow = false) {
     const isUser = message.role === 'user';
     const timestamp = message.created_at
       ? new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -1281,6 +1349,7 @@ class ChatInterface {
                 <div class="d-flex align-items-center">
                   ${bookmarkBtn}
                   ${copyBtn}
+                  ${this.renderArchiveButton(message, inActiveWindow)}
                   ${deleteBtn}
                   <small class="opacity-75">${timestamp}</small>
                 </div>
@@ -1345,6 +1414,7 @@ class ChatInterface {
               <div class="d-flex align-items-center ms-auto">
                 ${bookmarkBtn}
                 ${copyBtn}
+                ${this.renderArchiveButton(message, inActiveWindow)}
                 ${deleteBtn}
                 <small class="text-muted">${timestamp}</small>
               </div>

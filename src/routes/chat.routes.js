@@ -332,6 +332,43 @@ router.get('/:sessionId/stream/reconnect', [
 });
 
 /**
+ * POST /api/chat/:sessionId/messages/:messageId/archive
+ * Exclude a message from LLM context, or restore it. The row stays in history.
+ */
+router.post('/:sessionId/messages/:messageId/archive', [
+  param('sessionId').isInt().withMessage('Invalid session ID'),
+  param('messageId').isInt().withMessage('Invalid message ID'),
+  body('archived').isBoolean().withMessage('archived must be true or false'),
+  validate
+], async (req, res, next) => {
+  try {
+    const sessionId = parseInt(req.params.sessionId);
+    const messageId = parseInt(req.params.messageId);
+    const archived = req.body.archived === true || req.body.archived === 'true';
+
+    const message = await ConversationService.setMessageArchived(
+      sessionId,
+      req.userId,
+      messageId,
+      archived
+    );
+
+    res.json({
+      success: true,
+      data: { id: message.id, archived: message.archived ? 1 : 0 },
+    });
+  } catch (error) {
+    if (error.message === 'Session not found' || error.message === 'Unauthorized access to session') {
+      return next(new AppError(error.message, 404, 'SESSION_NOT_FOUND'));
+    }
+    if (error.message === 'Message not found in this session') {
+      return next(new AppError(error.message, 404, 'MESSAGE_NOT_FOUND'));
+    }
+    next(error);
+  }
+});
+
+/**
  * DELETE /api/chat/:sessionId/messages/:messageId
  * Delete a specific message
  */
