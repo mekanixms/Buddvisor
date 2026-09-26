@@ -224,13 +224,14 @@ class ConversationMode {
   handleRoundComplete(data) {
     // Finalize the current streaming message
     if (this.currentAgent) {
-      window.chatInterface.finalizeStreamingMessage();
+      window.chatInterface.finalizeStreamingMessage(null, data.tokenUsage);
       this.currentAgent = null;
     }
 
     this.currentRound = data.round || (this.currentRound + 1);
     this.tokensUsed = data.tokensUsed || this.tokensUsed;
     this.updateStatusDisplay();
+    window.chatInterface.loadContextTokenEstimates();
   }
 
   /**
@@ -284,8 +285,12 @@ class ConversationMode {
         role: 'assistant',
         content: `**Conversation Summary:**\n\n${data.conclusion}`,
         agent_name: 'Orchestrator',
+        metadata: Array.isArray(data.tokenUsage) && data.tokenUsage.length > 0
+          ? { token_usage: data.tokenUsage }
+          : null,
       });
     }
+    window.chatInterface.loadContextTokenEstimates();
 
     // Show completion message based on reason
     const reasonMessages = {

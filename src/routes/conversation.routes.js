@@ -116,6 +116,7 @@ router.get('/:sessionId/stream', [
             type: 'done',
             reason: result.reason,
             conclusion: result.conclusion,
+            tokenUsage: result.tokenUsage || null,
           })}\n\n`);
           break;
         } else if (result.error) {
@@ -131,6 +132,7 @@ router.get('/:sessionId/stream', [
             round: result.round,
             speaker: result.speaker?.name,
             tokensUsed: result.tokensUsed,
+            tokenUsage: result.tokenUsage || null,
           })}\n\n`);
         }
 

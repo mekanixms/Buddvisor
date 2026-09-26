@@ -2,8 +2,6 @@ const crypto = require('crypto');
 const WorkSession = require('../../models/WorkSession');
 const Document = require('../../models/Document');
 const Message = require('../../models/Message');
-const ContextManager = require('./ContextManager');
-const OrchestratorAgent = require('../chat/OrchestratorAgent');
 const { syncSessionStorageLinks } = require('./SessionStorageLinks');
 const { toolRegistry } = require('../tools/ToolRegistry');
 const { encrypt, decrypt } = require('../../utils/crypto');
@@ -330,50 +328,62 @@ class SessionService {
   }
 
   /**
-   * Get approximate context token estimates for the Orchestrator and each agent in a session.
-   * Used for UI transparency; does not include dynamic document chunks or processed media.
+   * Actual input/output token totals for the orchestrator and each agent in a session.
+   * Sums metadata.token_usage saved on assistant messages. Assigned agents with no
+   * recorded calls are included at zero so the roster stays stable.
    * @param {number} sessionId - Session ID
    * @param {number} userId - User ID
-   * @returns {Promise<{ orchestrator: { tokens: number, model?: string }, agents: Array<{ agent_id: number, name: string, tokens: number, model?: string }> }>}
+   * @returns {Promise<{ actors: Array<{ agent_id: number|null, agent_name: string, input_tokens: number, output_tokens: number }> }>}
    */
   static async getContextTokenEstimates(sessionId, userId) {
     const session = await this.getCompleteSession(sessionId, userId);
-    const messages = await Message.getContextMessages(sessionId, session.context_length || 50);
-    const formattedMessages = ContextManager.formatMessagesForLLM(messages);
-    const placeholderUser = { role: 'user', content: '' };
+    const messages = await Message.listAssistantMetadata(sessionId);
 
-    const systemPrompt = ContextManager.buildSystemPrompt(session);
-    const orchestratorContext = [
-      { role: 'system', content: systemPrompt },
-      ...formattedMessages,
-      placeholderUser,
-    ];
-    const orchestratorTokens = ContextManager.getContextSize(orchestratorContext);
-    const orchestratorModel = session.orchestrator_provider_config?.model;
-
-    const agents = (session.agents || []).map((agent) => {
-      const agentSystemPrompt = OrchestratorAgent.buildAgentSystemPrompt(
-        agent,
-        session.agents || [],
-        '',
-        null,
-        null,
-        session
-      );
-      const agentContext = [
-        { role: 'system', content: agentSystemPrompt },
-        ...formattedMessages,
-        placeholderUser,
-      ];
-      const tokens = ContextManager.getContextSize(agentContext);
-      const model = agent.provider_config?.model;
-      return { agent_id: agent.id, name: agent.name, tokens, model };
+    const byKey = new Map();
+    byKey.set('orch', {
+      agent_id: null,
+      agent_name: 'Orchestrator',
+      input_tokens: 0,
+      output_tokens: 0,
     });
+    for (const agent of session.agents || []) {
+      byKey.set(`agent:${agent.id}`, {
+        agent_id: agent.id,
+        agent_name: agent.name,
+        input_tokens: 0,
+        output_tokens: 0,
+      });
+    }
 
-    return {
-      orchestrator: { tokens: orchestratorTokens, model: orchestratorModel },
-      agents,
-    };
+    for (const msg of messages) {
+      let meta = msg.metadata;
+      if (typeof meta === 'string') {
+        try {
+          meta = JSON.parse(meta);
+        } catch {
+          continue;
+        }
+      }
+      const usage = meta?.token_usage;
+      if (!Array.isArray(usage)) continue;
+      for (const entry of usage) {
+        const key = entry.agent_id == null ? 'orch' : `agent:${entry.agent_id}`;
+        let bucket = byKey.get(key);
+        if (!bucket) {
+          bucket = {
+            agent_id: entry.agent_id ?? null,
+            agent_name: entry.agent_name || 'Agent',
+            input_tokens: 0,
+            output_tokens: 0,
+          };
+          byKey.set(key, bucket);
+        }
+        bucket.input_tokens += Number(entry.input_tokens) || 0;
+        bucket.output_tokens += Number(entry.output_tokens) || 0;
+      }
+    }
+
+    return { actors: [...byKey.values()] };
   }
 
   /**

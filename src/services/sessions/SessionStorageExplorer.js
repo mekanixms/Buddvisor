@@ -8,11 +8,15 @@ const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const SessionService = require('./SessionService');
+const WorkSession = require('../../models/WorkSession');
 const {
   ensureSessionStorageDir,
   sessionHasLocalWorkingFolder,
   getSessionStorageTargets,
   isManagedLinkName,
+  WORKSPACE_LINK_PREFIX,
+  ORCHESTRATOR_WORKSPACE_LINK,
+  ORCHESTRATOR_DB_LINK,
 } = require('./SessionStorageLinks');
 const logger = require('../../utils/logger');
 
@@ -172,6 +176,32 @@ function isProtectedRootEntry(relPosix) {
 }
 
 /**
+ * Human-readable owner for a session-root index link (workspace_* / *.db).
+ * @param {string} name
+ * @param {Map<number, { id: number, name?: string }>} agentsById
+ * @returns {string|null}
+ */
+function ownerLabelForRootEntry(name, agentsById) {
+  if (!name) return null;
+  if (name === ORCHESTRATOR_WORKSPACE_LINK) return 'Orchestrator';
+  if (name === ORCHESTRATOR_DB_LINK) return 'Orchestrator database';
+  if (name.startsWith(WORKSPACE_LINK_PREFIX)) {
+    const id = Number(name.slice(WORKSPACE_LINK_PREFIX.length));
+    if (!Number.isFinite(id)) return null;
+    const agent = agentsById.get(id);
+    return agent?.name ? String(agent.name) : `Agent ${id}`;
+  }
+  if (name.endsWith('.db')) {
+    const id = Number(name.slice(0, -'.db'.length));
+    if (!Number.isFinite(id)) return null;
+    const agent = agentsById.get(id);
+    const agentName = agent?.name ? String(agent.name) : `Agent ${id}`;
+    return `${agentName} database`;
+  }
+  return null;
+}
+
+/**
  * After lexical resolve, require that the real path (if it exists) stays in
  * the session dir, a known workspace, a known db file, or documents storage.
  */
@@ -250,6 +280,12 @@ async function list(sessionId, userId, relativePath = '') {
     throw new StorageExplorerError('Path is not a directory', 400, 'NOT_A_DIRECTORY');
   }
 
+  let agentsById = new Map();
+  if (!rel) {
+    const agents = await WorkSession.getAgents(sessionId);
+    agentsById = new Map((agents || []).map((a) => [a.id, a]));
+  }
+
   const dirents = await fs.readdir(abs, { withFileTypes: true });
   const entries = [];
   for (const ent of dirents) {
@@ -275,6 +311,7 @@ async function list(sessionId, userId, relativePath = '') {
     } else if (lst?.isFile()) {
       type = 'file';
     }
+    const owner_label = !rel ? ownerLabelForRootEntry(ent.name, agentsById) : null;
     entries.push({
       name: ent.name,
       path: childRel,
@@ -283,6 +320,7 @@ async function list(sessionId, userId, relativePath = '') {
       size,
       mtime,
       protected: isProtectedRootEntry(childRel),
+      owner_label: owner_label || undefined,
     });
   }
 

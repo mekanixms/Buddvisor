@@ -15,6 +15,7 @@ const { decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const promptsLogger = logger.promptsLogger;
 const { expandPromptMacros } = require('../../utils/promptMacros');
+const { usageFromResponse, tokenRow, mergeTokenRows } = require('./tokenUsage');
 
 class ConversationModeService {
   constructor() {
@@ -164,12 +165,19 @@ class ConversationModeService {
         state.status = 'completed';
         await ConversationRound.updateStatus(round.id, 'completed');
 
+        const tokenUsage = mergeTokenRows([
+          tokenRow(null, 'Orchestrator', speakerDecision.usage),
+        ]);
+        state.tokensUsed += speakerDecision.usage?.tokensUsed || 0;
+
         // Add conclusion message
         await Message.create({
           session_id: sessionId,
           role: 'assistant',
           content: speakerDecision.conclusion,
           agent_name: 'Orchestrator',
+          tokens_used: speakerDecision.usage?.tokensUsed || 0,
+          metadata: tokenUsage.length > 0 ? { token_usage: tokenUsage } : null,
         });
 
         logger.info(`Conversation ${sessionId} concluded by orchestrator`);
@@ -178,6 +186,7 @@ class ConversationModeService {
           done: true,
           reason: 'orchestrator_concluded',
           conclusion: speakerDecision.conclusion,
+          tokenUsage,
         };
       }
 
@@ -193,21 +202,29 @@ class ConversationModeService {
       // Execute selected agent's turn
       const response = await this.executeAgentTurn(actualSpeaker, state, context, onChunk);
 
+      const tokenUsage = mergeTokenRows([
+        tokenRow(null, 'Orchestrator', speakerDecision.usage),
+        tokenRow(actualSpeaker.id, actualSpeaker.name, response),
+      ]);
+      const roundTokens = (speakerDecision.usage?.tokensUsed || 0) + (response.tokensUsed || 0);
+
       // Update round and state
       await ConversationRound.updateStatus(round.id, 'completed', {
         speaker_agent_id: actualSpeaker.id,
         speaker_agent_name: actualSpeaker.name,
-        tokens_used: response.tokensUsed,
+        tokens_used: roundTokens,
       });
 
-      state.tokensUsed += response.tokensUsed || 0;
+      state.tokensUsed += roundTokens;
 
       // Extract and create artifacts from the response content
       const ArtifactService = require('../artifacts/ArtifactService');
       const artifacts = await ArtifactService.processArtifacts(response.content);
 
       // Store agent message with artifact metadata
-      const metadata = artifacts.length > 0 ? { artifacts } : null;
+      const metadata = {};
+      if (artifacts.length > 0) metadata.artifacts = artifacts;
+      if (tokenUsage.length > 0) metadata.token_usage = tokenUsage;
 
       await Message.create({
         session_id: sessionId,
@@ -215,8 +232,8 @@ class ConversationModeService {
         content: response.content,
         agent_id: actualSpeaker.id,
         agent_name: actualSpeaker.name,
-        tokens_used: response.tokensUsed,
-        metadata,
+        tokens_used: roundTokens,
+        metadata: Object.keys(metadata).length > 0 ? metadata : null,
       });
 
       logger.debug(`Round ${state.currentRound} completed by ${actualSpeaker.name}`);
@@ -227,6 +244,7 @@ class ConversationModeService {
         response: response.content,
         round: state.currentRound,
         tokensUsed: state.tokensUsed,
+        tokenUsage,
       };
     } catch (error) {
       logger.error(`Error in round ${state.currentRound}:`, error);
@@ -246,6 +264,7 @@ class ConversationModeService {
    * @returns {Promise<object>} - { conclude: boolean, agentId?, conclusion? }
    */
   async selectNextSpeaker(state, context) {
+    let usage = null;
     try {
       const session = await WorkSession.findById(state.sessionId);
       const provider = await this.getOrchestratorProvider(session);
@@ -311,6 +330,7 @@ Respond in JSON format ONLY:
         // ignore
       }
       const response = await provider.chat(orchestratorMessages, orchestratorChatOpts);
+      const usage = usageFromResponse(response);
 
       // Parse the response
       const jsonMatch = response.content.match(/\{[\s\S]*\}/);
@@ -324,6 +344,7 @@ Respond in JSON format ONLY:
         return {
           conclude: true,
           conclusion: decision.conclusion || 'Discussion concluded.',
+          usage,
         };
       }
 
@@ -331,6 +352,7 @@ Respond in JSON format ONLY:
         conclude: false,
         agentId: decision.agentId,
         reasoning: decision.reasoning,
+        usage,
       };
     } catch (error) {
       logger.error('Error selecting next speaker:', error);
@@ -340,6 +362,7 @@ Respond in JSON format ONLY:
         conclude: false,
         agentId: randomAgent.id,
         reasoning: 'Fallback selection due to error',
+        usage,
       };
     }
   }
@@ -465,6 +488,8 @@ Guidelines:
       return {
         content: result.content,
         tokensUsed: result.tokensUsed || 0,
+        inputTokens: result.inputTokens || 0,
+        outputTokens: result.outputTokens || 0,
       };
     } catch (error) {
       logger.error(`Error executing agent ${agent.name} turn:`, error);

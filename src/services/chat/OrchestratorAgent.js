@@ -16,6 +16,7 @@ const logger = require('../../utils/logger');
 const promptsLogger = logger.promptsLogger;
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
 const { expandPromptMacros } = require('../../utils/promptMacros');
+const { usageFromResponse, tokenRow, mergeTokenRows } = require('./tokenUsage');
 
 /**
  * Generate a stable UUID-like conversation ID for prompt caching (e.g. xAI x-grok-conv-id).
@@ -79,12 +80,13 @@ class OrchestratorAgent {
       logger.info(`Routing decision: ${JSON.stringify(routingDecision)}`);
 
       // Step 2: Execute with the selected agent(s)
+      let result;
       if (routingDecision.type === 'single') {
         // Route to a single specialized agent
         const agentDocContext = documentContextByAgentId && documentContextByAgentId[routingDecision.agent.id] != null
           ? documentContextByAgentId[routingDecision.agent.id]
           : documentContext;
-        return await this.executeWithAgent(
+        result = await this.executeWithAgent(
           routingDecision.agent,
           session,
           agents,
@@ -96,7 +98,7 @@ class OrchestratorAgent {
         );
       } else if (routingDecision.type === 'multi') {
         // Coordinate multiple agents
-        return await this.executeMultiAgent(
+        result = await this.executeMultiAgent(
           routingDecision.agents,
           session,
           agents,
@@ -108,7 +110,7 @@ class OrchestratorAgent {
         );
       } else {
         // Handle directly with orchestrator (general query)
-        return await this.handleDirectly(
+        result = await this.handleDirectly(
           session,
           agents,
           context,
@@ -117,6 +119,14 @@ class OrchestratorAgent {
           { stream, onChunk }
         );
       }
+
+      const routingUsage = routingDecision.usage || usageFromResponse(null);
+      result.tokenUsage = mergeTokenRows([
+        tokenRow(null, 'Orchestrator', routingUsage),
+        ...(result.tokenUsage || []),
+      ]);
+      result.tokensUsed = (result.tokensUsed || 0) + (routingUsage.tokensUsed || 0);
+      return result;
     } catch (error) {
       logger.error('Orchestrator error:', error);
       throw error;
@@ -186,9 +196,25 @@ class OrchestratorAgent {
         chatOptions.conversationId = conversationIdForCache(session.id, null);
       }
       const response = await provider.chat(routingMessages, chatOptions);
+      const usage = usageFromResponse(response);
 
-      // Parse the routing decision
-      return this.parseRoutingResponse(response.content, agents);
+      // Parse the routing decision. Keep the call's usage even if the JSON is unusable.
+      try {
+        const decision = this.parseRoutingResponse(response.content, agents);
+        decision.usage = usage;
+        return decision;
+      } catch (parseError) {
+        logger.error('Routing analysis failed:', parseError);
+        if (agents.length > 0) {
+          return {
+            type: 'single',
+            agent: agents[0],
+            reasoning: 'Routing failed, using default agent',
+            usage,
+          };
+        }
+        return { type: 'direct', reasoning: 'Routing analysis failed', usage };
+      }
     } catch (error) {
       logger.error('Routing analysis failed:', error);
       // Fall back to first agent or direct handling
@@ -524,6 +550,9 @@ Summary:`;
         routedTo: agent.role,
         reasoning,
         tokensUsed: result.tokensUsed,
+        inputTokens: result.inputTokens || 0,
+        outputTokens: result.outputTokens || 0,
+        tokenUsage: [tokenRow(agent.id, agent.name, result)],
         toolCalls: result.toolCalls,
       };
     } catch (error) {
@@ -627,6 +656,8 @@ Summary:`;
               agent,
               content: response.content,
               tokensUsed: response.tokensUsed || 0,
+              inputTokens: response.inputTokens || 0,
+              outputTokens: response.outputTokens || 0,
             };
           } catch (error) {
             logger.error(`Error from agent ${agent.name}:`, error);
@@ -634,6 +665,8 @@ Summary:`;
               agent,
               content: `[Error getting response from ${agent.name}]`,
               tokensUsed: 0,
+              inputTokens: 0,
+              outputTokens: 0,
             };
           }
         })
@@ -659,6 +692,7 @@ Summary:`;
         routedTo: agents.map(a => a.role).join(', '),
         reasoning,
         tokensUsed: totalTokens,
+        tokenUsage: agentResponses.map((r) => tokenRow(r.agent.id, r.agent.name, r)),
       };
     } catch (error) {
       logger.error('Error in multi-agent execution:', error);
@@ -685,6 +719,7 @@ Summary:`;
         routedTo: 'none',
         reasoning: 'No API key configured',
         tokensUsed: 0,
+        tokenUsage: [],
       };
     }
 
@@ -782,6 +817,9 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
       routedTo: 'direct',
       reasoning: 'General query handled directly',
       tokensUsed: result.tokensUsed,
+      inputTokens: result.inputTokens || 0,
+      outputTokens: result.outputTokens || 0,
+      tokenUsage: [tokenRow(null, 'Orchestrator', result)],
       toolCalls: result.toolCalls,
     };
   }
@@ -941,6 +979,8 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
           task,
           content: result.content,
           tokensUsed: result.tokensUsed || 0,
+          inputTokens: result.inputTokens || 0,
+          outputTokens: result.outputTokens || 0,
         });
         delegatedTokens += result.tokensUsed || 0;
 
@@ -1059,6 +1099,10 @@ ${agentJsonList}
     );
 
     const delegatedNames = [...new Set(delegations.map(d => d.agentName))];
+    const tokenUsage = mergeTokenRows([
+      tokenRow(null, 'Orchestrator', result),
+      ...delegations.map((d) => tokenRow(d.agentId, d.agentName, d)),
+    ]);
     return {
       content: result.content,
       agentId: null,
@@ -1068,6 +1112,7 @@ ${agentJsonList}
         ? `Orchestrator-led: delegated to ${delegatedNames.join(', ')}`
         : 'Orchestrator-led: handled without delegation',
       tokensUsed: (result.tokensUsed || 0) + delegatedTokens,
+      tokenUsage,
       toolCalls: result.toolCalls,
       delegations,
     };
@@ -1141,6 +1186,8 @@ ${agentJsonList}
     return {
       content: result.content,
       tokensUsed: result.tokensUsed,
+      inputTokens: result.inputTokens || 0,
+      outputTokens: result.outputTokens || 0,
       toolCalls: result.toolCalls,
     };
   }
@@ -1163,6 +1210,8 @@ ${agentJsonList}
     const maxIterations = 100; // Prevent infinite loops
     let iterations = 0;
     let totalTokensUsed = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
     const toolCalls = [];
     const allowedToolNameSet = Array.isArray(allowedToolNames) ? new Set(allowedToolNames) : null;
     const parallelToolNameSet = Array.isArray(parallelToolNames) ? new Set(parallelToolNames) : null;
@@ -1202,7 +1251,10 @@ ${agentJsonList}
         response = await provider.chat(workingMessages, chatOpts);
       }
 
-      totalTokensUsed += response.usage?.total_tokens || 0;
+      const callUsage = usageFromResponse(response);
+      totalInputTokens += callUsage.inputTokens;
+      totalOutputTokens += callUsage.outputTokens;
+      totalTokensUsed += callUsage.tokensUsed;
 
       // Check if the response includes tool use
       // Different providers use different stop/finish reasons:
@@ -1329,6 +1381,8 @@ ${agentJsonList}
       return {
         content: finalContent,
         tokensUsed: totalTokensUsed,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
         toolCalls,
       };
     }
@@ -1338,6 +1392,8 @@ ${agentJsonList}
     return {
       content: 'I was unable to complete the task due to too many tool calls. Please try a simpler request.',
       tokensUsed: totalTokensUsed,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
       toolCalls,
     };
   }

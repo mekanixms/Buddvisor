@@ -106,6 +106,16 @@ body {
   border-bottom-left-radius: 0.25rem;
 }
 
+.chat-message.assistant .message-token-usage {
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+#context-token-estimates {
+  white-space: normal;
+  line-height: 1.2;
+}
+
 /* Task-related messages - subtle grey background */
 .chat-message.assistant .message-bubble.task-message {
   background-color: #f5f5f5;

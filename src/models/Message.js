@@ -244,6 +244,24 @@ class Message {
   }
 
   /**
+   * Assistant-message metadata for a session, used to sum per-actor token usage.
+   * @param {number} sessionId
+   * @returns {Promise<Array<{ metadata: string|null }>>}
+   */
+  static async listAssistantMetadata(sessionId) {
+    try {
+      return await dbAll(
+        `SELECT metadata FROM messages
+         WHERE session_id = ? AND role = 'assistant' AND metadata IS NOT NULL`,
+        [sessionId]
+      );
+    } catch (error) {
+      logger.error('Error listing assistant metadata:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get messages by task ID
    * @param {number} taskId - Task ID
    * @returns {Promise<Array>} - Array of messages

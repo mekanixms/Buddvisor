@@ -44,7 +44,10 @@ class SessionFileExplorer {
     if (!modalEl) {
       document.body.insertAdjacentHTML('beforeend', this.buildModalHtml());
       modalEl = document.getElementById('sessionFileExplorerModal');
-      modalEl.addEventListener('hidden.bs.modal', () => this.revokePreview());
+      modalEl.addEventListener('hidden.bs.modal', () => {
+        this.disposeOwnerTooltips();
+        this.revokePreview();
+      });
       modalEl.querySelector('#sfe-file-input').addEventListener('change', (e) => {
         this.handleUpload(e.target.files);
         e.target.value = '';
@@ -125,6 +128,7 @@ class SessionFileExplorer {
 
   async refresh() {
     if (!this.sessionId) return;
+    this.disposeOwnerTooltips();
     const tbody = document.getElementById('sfe-tbody');
     if (tbody) {
       tbody.innerHTML = `<tr><td colspan="4" class="text-muted text-center py-4">Loading…</td></tr>`;
@@ -163,6 +167,7 @@ class SessionFileExplorer {
   renderEntries(entries) {
     const tbody = document.getElementById('sfe-tbody');
     if (!tbody) return;
+    this.disposeOwnerTooltips();
     if (!entries.length) {
       tbody.innerHTML = `<tr><td colspan="4" class="text-muted text-center py-4">This folder is empty</td></tr>`;
       return;
@@ -175,6 +180,10 @@ class SessionFileExplorer {
       const badge = ent.type === 'symlink' ? ' <span class="badge text-bg-light border">link</span>' : '';
       const locked = ent.protected
         ? ' <i class="bi bi-lock text-muted" title="Managed workspace link"></i>'
+        : '';
+      const ownerLabel = (ent.owner_label || '').trim();
+      const ownerTip = ownerLabel
+        ? ` title="${escapeHtml(ownerLabel)}" data-bs-toggle="tooltip" data-bs-placement="right" data-sfe-owner-tip="1"`
         : '';
       const actions = [];
       if (!isDir) {
@@ -189,7 +198,7 @@ class SessionFileExplorer {
             <a href="#" class="text-decoration-none text-body"
                data-action="sfe-open-entry"
                data-path="${escapeHtml(ent.path)}"
-               data-isdir="${isDir ? '1' : '0'}">
+               data-isdir="${isDir ? '1' : '0'}"${ownerTip}>
               <i class="bi ${icon} me-1"></i>${escapeHtml(ent.name)}${badge}${locked}
             </a>
           </td>
@@ -201,6 +210,27 @@ class SessionFileExplorer {
         </tr>
       `;
     }).join('');
+    this.initOwnerTooltips();
+  }
+
+  disposeOwnerTooltips() {
+    document.querySelectorAll('#sfe-tbody [data-sfe-owner-tip]').forEach((el) => {
+      const tip = bootstrap.Tooltip.getInstance(el);
+      if (tip) tip.dispose();
+    });
+    const modal = document.getElementById('sessionFileExplorerModal');
+    (modal || document).querySelectorAll('.tooltip').forEach((node) => node.remove());
+  }
+
+  initOwnerTooltips() {
+    const modal = document.getElementById('sessionFileExplorerModal');
+    document.querySelectorAll('#sfe-tbody [data-sfe-owner-tip]').forEach((el) => {
+      bootstrap.Tooltip.getOrCreateInstance(el, {
+        container: modal || 'body',
+        placement: 'right',
+        trigger: 'hover',
+      });
+    });
   }
 
   formatSize(bytes) {

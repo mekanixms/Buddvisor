@@ -230,6 +230,7 @@ class ChatInterface {
               // Refresh history to get the saved message with proper ID
               await this.loadHistory();
               this.renderMessages();
+              this.loadContextTokenEstimates();
 
               // Start normal polling
               this.startPolling();
@@ -324,6 +325,7 @@ class ChatInterface {
         const response = await api.chat.getHistory(this.currentSession.id, 50, 0);
         const recentMessages = response.data.messages || [];
         const totalCount = response.data.total || 0;
+        let sawNewMessages = false;
 
         // Update total count and hasMore status
         this.totalMessages = totalCount;
@@ -346,6 +348,7 @@ class ChatInterface {
               this.messages = [...this.messages, ...newMessages];
               this.lastMessageCount = this.messages.length;
               this.renderMessages();
+              sawNewMessages = true;
             } else {
               // Last message not found in recent, might have been many new messages
               // Reload from current offset to get all new messages
@@ -362,6 +365,7 @@ class ChatInterface {
                 this.lastMessageCount = this.messages.length;
                 this.hasMoreMessages = checkResponse.data.hasMore || false;
                 this.renderMessages();
+                sawNewMessages = true;
               }
             }
           }
@@ -372,6 +376,10 @@ class ChatInterface {
           this.lastMessageCount = this.messages.length;
           this.hasMoreMessages = response.data.hasMore || false;
           this.renderMessages();
+          sawNewMessages = true;
+        }
+        if (sawNewMessages) {
+          this.loadContextTokenEstimates();
         }
       } catch (error) {
         // Silently fail polling errors to avoid spamming console
@@ -1328,10 +1336,11 @@ class ChatInterface {
       <div class="chat-message assistant mb-3${archivedClass}" data-message-id="${message.id || ''}">
         <div class="d-flex justify-content-start">
           <div class="message-bubble bg-light px-3 py-2 rounded-3${taskMessageClass}${archivedStyle}" style="max-width: 85%;">
-            <div class="message-header d-flex align-items-center mb-2">
-              <div class="d-flex align-items-center">
+            <div class="message-header d-flex align-items-center flex-wrap gap-1 mb-2">
+              <div class="d-flex align-items-center flex-wrap">
                 ${agentBadge}
                 ${archivedBadge}
+                ${this.renderTokenUsage(message)}
               </div>
               <div class="d-flex align-items-center ms-auto">
                 ${bookmarkBtn}
@@ -1348,6 +1357,27 @@ class ChatInterface {
         </div>
       </div>
     `;
+  }
+
+  /**
+   * Per-actor input/output tokens for the prompt that produced this answer.
+   */
+  renderTokenUsage(message) {
+    let metadata = message?.metadata;
+    if (typeof metadata === 'string') {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch {
+        metadata = null;
+      }
+    }
+    const rows = metadata?.token_usage;
+    if (!Array.isArray(rows) || rows.length === 0) return '';
+    const fmt = (n) => Number(n || 0).toLocaleString();
+    const text = rows
+      .map((r) => `${r.agent_name || 'Agent'} ${fmt(r.input_tokens)} in / ${fmt(r.output_tokens)} out`)
+      .join(' · ');
+    return `<small class="text-muted ms-2 message-token-usage" title="Tokens for this answer">${escapeHtml(text)}</small>`;
   }
 
   /**
@@ -1646,6 +1676,7 @@ class ChatInterface {
             // Refresh history to include any messages added externally (e.g., from n8n)
             await this.loadHistory();
             this.renderMessages();
+            this.loadContextTokenEstimates();
             // Stop reconnect polling if active, switch to normal polling
             this.stopReconnectPolling();
             if (!this.pollInterval) {
@@ -1755,6 +1786,7 @@ class ChatInterface {
     // Refresh history to include any messages added externally (e.g., from n8n)
     await this.loadHistory();
     this.renderMessages();
+    this.loadContextTokenEstimates();
     if (typeof window.checkSessionPoolModified === 'function') {
       window.checkSessionPoolModified();
     }
@@ -1827,33 +1859,36 @@ class ChatInterface {
   }
 
   /**
-   * Load and display approximate context token estimates for Orchestrator and each agent.
-   * Renders inline with char-count (same small text).
+   * Load and display session input/output token totals for the orchestrator and each agent.
    */
   async loadContextTokenEstimates() {
     const el = document.getElementById('context-token-estimates');
     if (!el) return;
     if (!this.currentSession) {
       el.textContent = '';
+      el.title = '';
       return;
     }
     el.textContent = '…';
     try {
       const res = await api.sessions.getContextTokenEstimates(this.currentSession.id);
-      if (!res.success || !res.data) {
+      const actors = res?.data?.actors;
+      if (!res.success || !Array.isArray(actors) || actors.length === 0) {
         el.textContent = '';
+        el.title = '';
         return;
       }
-      const { orchestrator, agents } = res.data;
-      const parts = [];
-      const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-      parts.push(`Orchestrator ~${fmt(orchestrator?.tokens ?? 0)}`);
-      (agents || []).forEach((a) => {
-        parts.push(`${a.name} ~${fmt(a.tokens ?? 0)}`);
-      });
-      el.textContent = parts.length ? parts.join(' · ') : '';
+      const compact = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
+      const exact = (n) => Number(n || 0).toLocaleString();
+      el.textContent = actors
+        .map((a) => `${a.agent_name} ${compact(a.input_tokens)} in / ${compact(a.output_tokens)} out`)
+        .join(' · ');
+      el.title = actors
+        .map((a) => `${a.agent_name} ${exact(a.input_tokens)} in / ${exact(a.output_tokens)} out`)
+        .join(' · ');
     } catch {
       el.textContent = '';
+      el.title = '';
     }
   }
 
@@ -1884,6 +1919,7 @@ class ChatInterface {
       await api.chat.clearHistory(this.currentSession.id);
       this.messages = [];
       this.renderMessages();
+      this.loadContextTokenEstimates();
       showToast('Conversation history cleared', 'success');
     } catch (error) {
       console.error('Error clearing history:', error);
@@ -1968,13 +2004,17 @@ class ChatInterface {
    * Finalize the streaming message
    * @param {string} content - Optional final content (if not provided, uses accumulated content)
    */
-  finalizeStreamingMessage(content = null) {
+  finalizeStreamingMessage(content = null, tokenUsage = null) {
     if (!this.currentStreamingMessageId) return;
 
     const message = this.messages.find(m => m.id === this.currentStreamingMessageId);
     if (message) {
       if (content !== null) {
         message.content = content;
+      }
+      if (Array.isArray(tokenUsage) && tokenUsage.length > 0) {
+        const metadata = (message.metadata && typeof message.metadata === 'object') ? message.metadata : {};
+        message.metadata = { ...metadata, token_usage: tokenUsage };
       }
       message.isStreaming = false;
     }

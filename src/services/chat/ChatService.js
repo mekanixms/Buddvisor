@@ -39,6 +39,13 @@ function ensureStringContent(content) {
   return String(content);
 }
 
+function attachTokenUsage(metadata, result) {
+  if (Array.isArray(result?.tokenUsage) && result.tokenUsage.length > 0) {
+    metadata.token_usage = result.tokenUsage;
+  }
+  return metadata;
+}
+
 class ChatService {
   static parseExplicitProcessMediaRequest(text) {
     const s = String(text || '');
@@ -244,6 +251,7 @@ class ChatService {
           reasoning: orchestratorResult.reasoning,
         };
         if (artifacts.length > 0) metadata.artifacts = artifacts;
+        attachTokenUsage(metadata, orchestratorResult);
 
         await Message.create({
           session_id: sessionId,
@@ -319,6 +327,7 @@ class ChatService {
           reasoning: orchestratorResult.reasoning,
         };
         if (artifacts.length > 0) metadata.artifacts = artifacts;
+        attachTokenUsage(metadata, orchestratorResult);
 
         await Message.create({
           session_id: sessionId,
@@ -375,6 +384,7 @@ class ChatService {
       if (Array.isArray(orchestratorResult.delegations) && orchestratorResult.delegations.length > 0) {
         metadata.delegations = orchestratorResult.delegations;
       }
+      attachTokenUsage(metadata, orchestratorResult);
 
       await Message.create({
         session_id: sessionId,

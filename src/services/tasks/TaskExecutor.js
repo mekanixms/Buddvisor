@@ -12,6 +12,7 @@ const WorkSession = require('../../models/WorkSession');
 const Message = require('../../models/Message');
 const logger = require('../../utils/logger');
 const { expandPromptMacros } = require('../../utils/promptMacros');
+const { usageFromResponse, tokenRow, mergeTokenRows } = require('../chat/tokenUsage');
 
 class TaskExecutor {
   constructor() {
@@ -168,11 +169,18 @@ class TaskExecutor {
 
       // Add completion message to session
       const combinedOutput = await TaskResult.getCombinedOutput(task.id);
+      const tokenUsage = mergeTokenRows(results.map((r) => tokenRow(r.agentId, r.agentName, r)));
+      const tokensUsed = results.reduce((sum, r) => sum + (r.tokensUsed || 0), 0);
       await Message.create({
         session_id: task.session_id,
         role: 'assistant',
         content: `Task completed by ${agentText}: ${task.task_description}\n\n${combinedOutput?.text || 'No output generated'}`,
-        metadata: { task_id: task.id, is_task_result: true },
+        tokens_used: tokensUsed,
+        metadata: {
+          task_id: task.id,
+          is_task_result: true,
+          ...(tokenUsage.length > 0 ? { token_usage: tokenUsage } : {}),
+        },
       });
 
       const totalTime = Date.now() - startTime;
@@ -209,12 +217,16 @@ class TaskExecutor {
         { role: 'user', content: task.task_description },
       ]);
 
+      const usage = usageFromResponse(response);
+
       return [{
         agentId: agent.id,
         agentName: agent.name,
         content: response.content,
         executionTime: Date.now() - startTime,
-        tokensUsed: response.usage?.total_tokens || 0,
+        tokensUsed: usage.tokensUsed,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
       }];
     } catch (error) {
       logger.error(`Agent ${agent.name} failed:`, error);
@@ -248,12 +260,16 @@ class TaskExecutor {
           { role: 'user', content: task.task_description },
         ]);
 
+        const usage = usageFromResponse(response);
+
         results.push({
           agentId: agent.id,
           agentName: agent.name,
           content: response.content,
           executionTime: Date.now() - startTime,
-          tokensUsed: response.usage?.total_tokens || 0,
+          tokensUsed: usage.tokensUsed,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
         });
 
         // Add to context for next agent
@@ -289,12 +305,16 @@ class TaskExecutor {
           { role: 'user', content: task.task_description },
         ]);
 
+        const usage = usageFromResponse(response);
+
         return {
           agentId: agent.id,
           agentName: agent.name,
           content: response.content,
           executionTime: Date.now() - startTime,
-          tokensUsed: response.usage?.total_tokens || 0,
+          tokensUsed: usage.tokensUsed,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
         };
       } catch (error) {
         logger.error(`Agent ${agent.name} failed in parallel execution:`, error);

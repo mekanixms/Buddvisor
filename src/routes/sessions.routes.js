@@ -189,7 +189,7 @@ router.post('/:id/test-ollama', [
 
 /**
  * GET /api/sessions/:id/context-token-estimates
- * Get approximate context token counts for Orchestrator and each agent
+ * Actual input/output token totals for the orchestrator and each agent
  */
 router.get('/:id/context-token-estimates', [
   param('id').isInt().withMessage('Invalid session ID'),
