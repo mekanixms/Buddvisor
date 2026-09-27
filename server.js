@@ -125,6 +125,20 @@ app.use('/api/tools', toolsRoutes);
 app.use('/api/conversation', conversationRoutes);
 app.use('/api/artifacts', artifactsRoutes);
 
+// Public app info for the user-menu About dialog
+app.get('/api/about', (req, res) => {
+  const pkg = require('./package.json');
+  const repository = (process.env.GITHUB_REPO_URL || 'https://github.com/mekanixms/Buddvisor.git').replace(/\.git$/, '');
+  res.json({
+    success: true,
+    data: {
+      name: 'Buddvisor',
+      version: pkg.version,
+      repository,
+    },
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({

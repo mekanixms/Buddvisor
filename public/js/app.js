@@ -297,6 +297,56 @@ function showSettings() {
 }
 
 /**
+ * About dialog: app version and the GitHub repository.
+ */
+async function showAbout() {
+  const existing = document.getElementById('aboutModal');
+  if (existing) existing.remove();
+
+  let version = '';
+  let repository = 'https://github.com/mekanixms/Buddvisor';
+  try {
+    const response = await api.get('/about');
+    if (response?.data?.version) version = response.data.version;
+    if (response?.data?.repository) repository = response.data.repository;
+  } catch (error) {
+    console.error('Error loading about info:', error);
+  }
+
+  const versionLine = version
+    ? `<p class="mb-2">Version <strong>${escapeHtml(version)}</strong></p>`
+    : '';
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal fade" id="aboutModal" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-info-circle me-2"></i>About Buddvisor</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            ${versionLine}
+            <p class="mb-0">
+              <a href="${escapeHtml(repository)}" target="_blank" rel="noopener noreferrer">
+                <i class="bi bi-github me-1"></i>${escapeHtml(repository.replace(/\.git$/, ''))}
+              </a>
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  const modalEl = document.getElementById('aboutModal');
+  modalEl.addEventListener('hidden.bs.modal', () => modalEl.remove());
+  bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+/**
  * Show toast notification
  * @param {string} message - Toast message
  * @param {string} type - Toast type (success, danger, warning, info)
@@ -640,6 +690,10 @@ document.addEventListener('click', (e) => {
     case 'show-settings':
       e.preventDefault();
       showSettings();
+      break;
+    case 'show-about':
+      e.preventDefault();
+      showAbout();
       break;
     case 'logout':
       e.preventDefault();
