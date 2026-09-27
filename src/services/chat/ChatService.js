@@ -14,6 +14,74 @@ const { toolExecutor } = require('../tools/ToolExecutor');
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
 const logger = require('../../utils/logger');
 const { expandPromptMacros } = require('../../utils/promptMacros');
+const { usageFromResponse, tokenRow } = require('./tokenUsage');
+
+const SUMMARY_MAX_MESSAGE_CHARS = 8000;
+const SUMMARY_MAX_TRANSCRIPT_CHARS = 120000;
+const SUMMARY_CALL_TIMEOUT_MS = 300000;
+
+/**
+ * Messages ending at anchorId, walking backward.
+ * @param {Array<object>} ordered
+ * @param {number} anchorId
+ * @param {{ scope: string, count: number, includeArchived: boolean }} options
+ * @returns {Array<object>|null}
+ */
+function selectSummaryMessages(ordered, anchorId, { scope, count, includeArchived }) {
+  const index = ordered.findIndex((m) => Number(m.id) === Number(anchorId));
+  if (index < 0) return null;
+
+  const isArchived = (m) => Number(m.archived) === 1;
+  if (includeArchived) {
+    if (scope === 'conversation') return ordered.slice(0, index + 1);
+    const n = Math.max(1, Number(count) || 1);
+    const start = Math.max(0, index + 1 - n);
+    return ordered.slice(start, index + 1);
+  }
+
+  const picked = [];
+  const target = scope === 'conversation' ? Infinity : Math.max(1, Number(count) || 1);
+  for (let i = index; i >= 0; i--) {
+    const message = ordered[i];
+    if (Number(message.id) !== Number(anchorId) && isArchived(message)) continue;
+    picked.push(message);
+    if (picked.length >= target) break;
+  }
+  picked.reverse();
+  return picked;
+}
+
+/**
+ * Plain-text excerpt. Drops the oldest messages first when the excerpt is too long.
+ * @param {Array<object>} messages
+ * @returns {{ text: string, includedCount: number, omitted: number }}
+ */
+function buildSummaryTranscript(messages) {
+  const parts = messages.map((m) => {
+    let speaker = 'Assistant';
+    if (m.role === 'user') speaker = 'User';
+    else if (m.agent_name) speaker = m.agent_name;
+    else if (m.role && m.role !== 'assistant') speaker = m.role;
+    let text = String(m.content || '').trim();
+    if (!text) text = '(empty)';
+    if (text.length > SUMMARY_MAX_MESSAGE_CHARS) {
+      text = `${text.slice(0, SUMMARY_MAX_MESSAGE_CHARS)}…`;
+    }
+    return `[${speaker}]\n${text}`;
+  });
+
+  let omitted = 0;
+  while (parts.length > 1 && parts.join('\n\n').length > SUMMARY_MAX_TRANSCRIPT_CHARS) {
+    parts.shift();
+    omitted += 1;
+  }
+
+  let text = parts.join('\n\n');
+  if (omitted > 0) {
+    text = `(${omitted} earlier message${omitted === 1 ? '' : 's'} omitted for length)\n\n${text}`;
+  }
+  return { text, includedCount: parts.length, omitted };
+}
 
 /**
  * Ensure assistant message content is a string. Some LLM providers may return
@@ -697,6 +765,195 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       messageCount,
       averageTokensPerMessage: messageCount > 0 ? Math.round(totalTokens / messageCount) : 0,
     };
+  }
+
+  /**
+   * Summarize messages ending at anchorMessageId and insert the summary immediately after it.
+   * @param {number} sessionId
+   * @param {number} userId
+   * @param {number} anchorMessageId
+   * @param {object} options
+   * @param {'count'|'conversation'} options.scope
+   * @param {number} [options.count]
+   * @param {number|null} [options.agentId] - null uses the session orchestrator
+   * @param {string} options.prompt
+   * @param {boolean} [options.includeArchived=true]
+   * @param {boolean} [options.archiveSources=false]
+   * @param {boolean} [options.saveToFile=false]
+   * @param {string} [options.saveFolder]
+   * @param {string} [options.saveFileName]
+   * @returns {Promise<{ message: object, archivedIds: number[], savedFile: object|null, saveError: string|null }>}
+   */
+  static async summarizeFromMessage(sessionId, userId, anchorMessageId, options = {}) {
+    const {
+      scope,
+      count = null,
+      agentId = null,
+      prompt,
+      includeArchived = true,
+      archiveSources = false,
+      saveToFile = false,
+      saveFolder = '',
+      saveFileName = '',
+    } = options;
+
+    if (scope !== 'count' && scope !== 'conversation') {
+      throw new Error('Choose how many messages to summarize, or the whole conversation up to this message');
+    }
+    if (scope === 'count' && (!Number.isInteger(count) || count < 1)) {
+      throw new Error('Message count must be a positive number');
+    }
+    const instruction = String(prompt || '').trim();
+    if (!instruction) {
+      throw new Error('A summary prompt is required');
+    }
+    if (instruction.length > 8000) {
+      throw new Error('Summary prompt is too long');
+    }
+    if (saveToFile) {
+      const fileName = String(saveFileName || '').trim();
+      if (!fileName) {
+        throw new Error('Enter a file name for the summary');
+      }
+      if (fileName.length > 255 || /[/\\]/.test(fileName) || fileName.includes('\0') || fileName === '.' || fileName === '..') {
+        throw new Error('Enter a file name without a folder path');
+      }
+    }
+
+    const session = await SessionService.getCompleteSession(sessionId, userId);
+    if (!session) {
+      throw new Error('Session not found or access denied');
+    }
+
+    const anchor = await Message.findById(anchorMessageId);
+    if (!anchor || anchor.session_id !== sessionId) {
+      throw new Error('Message not found in this session');
+    }
+
+    let agent = null;
+    let agentName = 'Orchestrator';
+    if (agentId != null) {
+      agent = (session.agents || []).find((a) => Number(a.id) === Number(agentId));
+      if (!agent) {
+        throw new Error('That agent is not assigned to this session');
+      }
+      agentName = agent.name || 'Agent';
+    }
+
+    const ordered = await Message.listOrdered(sessionId);
+    const selected = selectSummaryMessages(ordered, anchorMessageId, {
+      scope,
+      count,
+      includeArchived: !!includeArchived,
+    });
+    if (!selected || selected.length === 0) {
+      throw new Error('No messages to summarize in that range');
+    }
+
+    const transcript = buildSummaryTranscript(selected);
+    const who = agent
+      ? `You are ${agentName}${agent.role ? `, ${agent.role}` : ''}.`
+      : 'You are the Orchestrator for this session.';
+    const messages = [
+      {
+        role: 'system',
+        content: `${who} Summarize the conversation excerpt the user provides. Follow their instructions. Reply with the summary only.`,
+      },
+      {
+        role: 'user',
+        content: `${instruction}\n\n--- Conversation excerpt (${transcript.includedCount} message${transcript.includedCount === 1 ? '' : 's'}) ---\n\n${transcript.text}`,
+      },
+    ];
+
+    const ProviderFactory = require('../../providers/ProviderFactory');
+    let provider;
+    if (agent) {
+      provider = await AgentService.getAgentProvider(agent.id, userId, {
+        minTimeout: SUMMARY_CALL_TIMEOUT_MS,
+      });
+    } else {
+      const providerType = session.orchestrator_provider_type || 'claude';
+      const apiKey = OrchestratorAgent.getOrchestratorApiKey(session, providerType);
+      if (!apiKey) {
+        throw new Error('No orchestrator API key is configured');
+      }
+      const model = OrchestratorAgent.getOrchestratorModel(session, providerType);
+      const configuredTimeout = OrchestratorAgent.getOrchestratorTimeout(session);
+      const cfg = session.orchestrator_provider_config || {};
+      provider = ProviderFactory.create(providerType, {
+        apiKey,
+        model,
+        timeout: Math.max(Number(configuredTimeout) || 0, SUMMARY_CALL_TIMEOUT_MS),
+        ...(cfg.maxTokens ? { maxTokens: cfg.maxTokens } : {}),
+        ...(cfg.temperature != null ? { temperature: cfg.temperature } : {}),
+        ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}),
+      });
+    }
+
+    logger.info(`Summarizing ${transcript.includedCount} messages in session ${sessionId} with ${agentName}`);
+    const response = await provider.chat(messages, {});
+    const content = ensureStringContent(response?.content).trim();
+    if (!content) {
+      throw new Error('The model returned an empty summary');
+    }
+
+    const usage = usageFromResponse(response);
+    const summaryScope = scope === 'conversation' && transcript.omitted === 0
+      ? 'conversation'
+      : 'count';
+    const metadata = {
+      is_summary: true,
+      summary: {
+        agent_name: agentName,
+        message_count: transcript.includedCount,
+        scope: summaryScope,
+        anchor_message_id: anchorMessageId,
+        omitted_for_length: transcript.omitted,
+      },
+      token_usage: [tokenRow(agent ? agent.id : null, agentName, usage)],
+    };
+
+    const sortIndex = await Message.sortIndexAfter(sessionId, anchorMessageId);
+    const message = await Message.create({
+      session_id: sessionId,
+      role: 'assistant',
+      content,
+      tokens_used: usage.tokensUsed || 0,
+      agent_id: agent ? agent.id : null,
+      agent_name: agentName,
+      metadata,
+      sort_index: sortIndex,
+    });
+
+    const archivedIds = [];
+    if (archiveSources) {
+      for (const source of selected) {
+        if (Number(source.archived) !== 1) {
+          await Message.update(source.id, { archived: 1 });
+        }
+        archivedIds.push(source.id);
+      }
+    }
+
+    let savedFile = null;
+    let saveError = null;
+    if (saveToFile) {
+      try {
+        const SessionStorageExplorer = require('../sessions/SessionStorageExplorer');
+        savedFile = await SessionStorageExplorer.writeTextFile(
+          sessionId,
+          userId,
+          saveFolder || '',
+          saveFileName,
+          content
+        );
+      } catch (error) {
+        logger.error('Failed to save summary file:', error);
+        saveError = error.message || 'Failed to save the summary file';
+      }
+    }
+
+    return { message, archivedIds, savedFile, saveError };
   }
 }
 

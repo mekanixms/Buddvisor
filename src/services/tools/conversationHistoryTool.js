@@ -104,7 +104,7 @@ async function getMessages(sessionId, from, to, orderedAsc = true, filters = {})
     const sql = `SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, metadata
        FROM messages
        ${whereClause}
-       ORDER BY created_at ${orderDirection}
+       ORDER BY COALESCE(sort_index, id) ${orderDirection}, id ${orderDirection}
        LIMIT ? OFFSET ?`;
     
     params.push(limit, offset);

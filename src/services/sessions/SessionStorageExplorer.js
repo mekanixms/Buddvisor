@@ -423,6 +423,59 @@ async function uploadFile(sessionId, userId, relativeDir, file) {
   return { path: childRel, name: destName, size };
 }
 
+/**
+ * Write UTF-8 text into a folder under the session storage root.
+ * A name with no extension is saved as .md. An existing file is replaced.
+ * @param {number} sessionId
+ * @param {number} userId
+ * @param {string} relativeDir
+ * @param {string} fileName
+ * @param {string} content
+ * @returns {Promise<{ path: string, name: string }>}
+ */
+async function writeTextFile(sessionId, userId, relativeDir, fileName, content) {
+  let destName = sanitizeFileName(fileName);
+  const ext = path.extname(destName);
+  if (!ext || ext === '.') {
+    destName = `${destName.replace(/\.+$/, '')}.md`;
+  }
+  const text = String(content ?? '');
+  if (Buffer.byteLength(text, 'utf8') > MAX_UPLOAD_BYTES) {
+    throw new StorageExplorerError('Summary is too large to save', 400, 'FILE_TOO_LARGE');
+  }
+
+  const { sessionDir, targets } = await prepareSession(sessionId, userId);
+  const parent = toPosixRelative(relativeDir);
+  const childRel = parent ? `${parent}/${destName}` : destName;
+  if (isProtectedRootEntry(childRel)) {
+    throw new StorageExplorerError('Cannot replace a managed session workspace link', 403, 'PROTECTED_PATH');
+  }
+
+  const { abs: parentAbs } = await resolveExisting(sessionDir, parent, targets, { mustExist: true });
+  let parentSt;
+  try {
+    parentSt = await fs.stat(parentAbs);
+  } catch {
+    throw new StorageExplorerError('Destination folder not found', 404, 'NOT_FOUND');
+  }
+  if (!parentSt.isDirectory()) {
+    throw new StorageExplorerError('Destination is not a folder', 400, 'NOT_A_DIRECTORY');
+  }
+
+  const destAbs = path.join(parentAbs, destName);
+  const destLex = resolveLexical(sessionDir, childRel);
+  await assertRealPathAllowed(destLex.abs, sessionDir, targets, { mustExist: false });
+
+  const existing = await lstatSafe(destAbs);
+  if (existing && (existing.isDirectory() || existing.isSymbolicLink())) {
+    throw new StorageExplorerError('Cannot overwrite a folder or link', 409, 'ALREADY_EXISTS');
+  }
+
+  await fs.writeFile(destAbs, text, 'utf8');
+  logger.info(`[SessionStorageExplorer] write ${childRel} (session ${sessionId})`);
+  return { path: childRel, name: destName };
+}
+
 async function remove(sessionId, userId, relativePath) {
   const rel = toPosixRelative(relativePath);
   if (!rel) {
@@ -485,6 +538,7 @@ module.exports = {
   list,
   mkdir,
   uploadFile,
+  writeTextFile,
   remove,
   getFile,
   StorageExplorerError,

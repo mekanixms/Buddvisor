@@ -1,6 +1,10 @@
 const { dbRun, dbGet, dbAll } = require('../../config/database');
 const logger = require('../utils/logger');
 
+/** Conversation order. created_at stays the clock; sort_index places inserts (e.g. summaries). */
+const ORDER_ASC = 'COALESCE(sort_index, id) ASC, id ASC';
+const ORDER_DESC = 'COALESCE(sort_index, id) DESC, id DESC';
+
 class Message {
   /**
    * Create a new message
@@ -18,12 +22,17 @@ class Message {
         agent_id = null,
         agent_name = null,
         metadata = null,
+        sort_index = null,
       } = messageData;
 
+      const sortIndex = sort_index == null
+        ? await this.nextAppendSortIndex(session_id)
+        : sort_index;
+
       const result = await dbRun(
-        `INSERT INTO messages (session_id, role, content, task_id, tokens_used, agent_id, agent_name, metadata)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [session_id, role, content, task_id, tokens_used, agent_id, agent_name, metadata ? JSON.stringify(metadata) : null]
+        `INSERT INTO messages (session_id, role, content, task_id, tokens_used, agent_id, agent_name, metadata, sort_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [session_id, role, content, task_id, tokens_used, agent_id, agent_name, metadata ? JSON.stringify(metadata) : null, sortIndex]
       );
 
       logger.info(`Message created in session ${session_id} (ID: ${result.lastID})`);
@@ -33,6 +42,83 @@ class Message {
       logger.error('Error creating message:', error);
       throw error;
     }
+  }
+
+  /**
+   * Sort key for a message appended at the end of a session.
+   * @param {number} sessionId
+   * @returns {Promise<number>}
+   */
+  static async nextAppendSortIndex(sessionId) {
+    const row = await dbGet(
+      `SELECT MAX(COALESCE(sort_index, id)) AS max_sort FROM messages WHERE session_id = ?`,
+      [sessionId]
+    );
+    const maxSort = Number(row?.max_sort);
+    return (Number.isFinite(maxSort) ? maxSort : 0) + 1024;
+  }
+
+  /**
+   * Sort key that places a new row immediately after anchorId.
+   * @param {number} sessionId
+   * @param {number} anchorId
+   * @param {number} [depth]
+   * @returns {Promise<number>}
+   */
+  static async sortIndexAfter(sessionId, anchorId, depth = 0) {
+    const anchor = await this.findById(anchorId);
+    if (!anchor || anchor.session_id !== sessionId) {
+      throw new Error('Message not found in this session');
+    }
+    const anchorSort = Number(anchor.sort_index ?? anchor.id);
+    const next = await dbGet(
+      `SELECT id, sort_index FROM messages
+       WHERE session_id = ?
+         AND (
+           COALESCE(sort_index, id) > ?
+           OR (COALESCE(sort_index, id) = ? AND id > ?)
+         )
+       ORDER BY ${ORDER_ASC}
+       LIMIT 1`,
+      [sessionId, anchorSort, anchorSort, anchor.id]
+    );
+    if (!next) return anchorSort + 1024;
+    const nextSort = Number(next.sort_index ?? next.id);
+    if (!(nextSort > anchorSort) || (nextSort - anchorSort) < 1e-6) {
+      if (depth > 0) {
+        throw new Error('Could not place the summary in the conversation');
+      }
+      await this.rebalanceSortIndex(sessionId);
+      return this.sortIndexAfter(sessionId, anchorId, depth + 1);
+    }
+    return (anchorSort + nextSort) / 2;
+  }
+
+  /**
+   * Spread sort keys so a later insert-between still has a gap.
+   * @param {number} sessionId
+   */
+  static async rebalanceSortIndex(sessionId) {
+    const rows = await dbAll(
+      `SELECT id FROM messages WHERE session_id = ? ORDER BY ${ORDER_ASC}`,
+      [sessionId]
+    );
+    for (let i = 0; i < rows.length; i++) {
+      await dbRun('UPDATE messages SET sort_index = ? WHERE id = ?', [(i + 1) * 1024, rows[i].id]);
+    }
+  }
+
+  /**
+   * Every message in a session, in conversation order.
+   * @param {number} sessionId
+   * @returns {Promise<Array>}
+   */
+  static async listOrdered(sessionId) {
+    const rows = await dbAll(
+      `SELECT * FROM messages WHERE session_id = ? ORDER BY ${ORDER_ASC}`,
+      [sessionId]
+    );
+    return rows.map((m) => this.parseMessage(m));
   }
 
   /**
@@ -80,7 +166,7 @@ class Message {
       return await dbAll(
         `SELECT * FROM messages
          WHERE session_id = ?
-         ORDER BY created_at ASC
+         ORDER BY ${ORDER_ASC}
          LIMIT ? OFFSET ?`,
         [sessionId, limit, offset]
       );
@@ -101,7 +187,7 @@ class Message {
       return await dbAll(
         `SELECT * FROM messages
          WHERE session_id = ?
-         ORDER BY created_at DESC
+         ORDER BY ${ORDER_DESC}
          LIMIT ?`,
         [sessionId, limit]
       );
@@ -144,11 +230,11 @@ class Message {
         `SELECT * FROM (
            SELECT * FROM messages
            WHERE session_id = ?
-           ORDER BY created_at DESC
+           ORDER BY ${ORDER_DESC}
            LIMIT ?
          ) recent
          WHERE COALESCE(archived, 0) = 0
-         ORDER BY created_at ASC`,
+         ORDER BY ${ORDER_ASC}`,
         [sessionId, contextLength]
       );
 
@@ -273,7 +359,7 @@ class Message {
   static async findByTaskId(taskId) {
     try {
       const messages = await dbAll(
-        'SELECT * FROM messages WHERE task_id = ? ORDER BY created_at ASC',
+        `SELECT * FROM messages WHERE task_id = ? ORDER BY ${ORDER_ASC}`,
         [taskId]
       );
       return messages.map(m => this.parseMessage(m));
@@ -289,7 +375,7 @@ class Message {
   static async findByAgentId(sessionId, agentId) {
     try {
       const messages = await dbAll(
-        'SELECT * FROM messages WHERE session_id = ? AND agent_id = ? ORDER BY created_at ASC',
+        `SELECT * FROM messages WHERE session_id = ? AND agent_id = ? ORDER BY ${ORDER_ASC}`,
         [sessionId, agentId]
       );
       return messages.map(m => this.parseMessage(m));
@@ -403,11 +489,11 @@ class Message {
            SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived
            FROM messages
            WHERE session_id = ?
-           ORDER BY created_at DESC
+           ORDER BY ${ORDER_DESC}
            LIMIT ?
          ) recent
          WHERE COALESCE(archived, 0) = 0
-         ORDER BY created_at ASC`,
+         ORDER BY ${ORDER_ASC}`,
         [sessionId, limit]
       );
 
@@ -419,7 +505,7 @@ class Message {
   }
 
   /**
-   * Get context messages for a specific agent (user messages + agent's own messages only)
+   * Get context messages for a specific agent (user messages, this agent's replies, and summaries)
    * Returns messages in chronological order
    * @param {number} sessionId - Session ID
    * @param {number} agentId - Agent ID
@@ -428,17 +514,22 @@ class Message {
    */
   static async getContextForAgent(sessionId, agentId, limit = process.env.DEFAULT_MESSAGE_LIMIT_CONTEXT_LENGTH || 10) {
     try {
-      // User messages and this agent's messages, within the window, excluding manual archives.
+      // User messages, this agent's messages, and conversation summaries, within the window.
       const messages = await dbAll(
         `SELECT * FROM (
            SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived
            FROM messages
-           WHERE session_id = ? AND (agent_id IS NULL OR agent_id = ?)
-           ORDER BY created_at DESC
+           WHERE session_id = ?
+             AND (
+               agent_id IS NULL
+               OR agent_id = ?
+               OR COALESCE(json_extract(metadata, '$.is_summary'), 0) = 1
+             )
+           ORDER BY ${ORDER_DESC}
            LIMIT ?
          ) recent
          WHERE COALESCE(archived, 0) = 0
-         ORDER BY created_at ASC`,
+         ORDER BY ${ORDER_ASC}`,
         [sessionId, agentId, limit]
       );
 

@@ -364,7 +364,7 @@ class AgentService {
    * @param {number} userId - User ID
    * @returns {Promise<BaseLLMProvider>} - Provider instance
    */
-  static async getAgentProvider(agentId, userId) {
+  static async getAgentProvider(agentId, userId, overrides = {}) {
     const agent = await Agent.findById(agentId);
 
     if (!agent) {
@@ -408,8 +408,14 @@ class AgentService {
       config.baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
     }
 
-    // Create provider instance
-    return ProviderFactory.create(agent.provider_type, config);
+    // overrides apply to this call only (not saved). minTimeout raises the wait
+    // without shortening a longer timeout already stored on the agent.
+    const merged = { ...config, ...overrides };
+    if (overrides.minTimeout != null) {
+      merged.timeout = Math.max(Number(config.timeout) || 0, Number(overrides.minTimeout) || 0);
+      delete merged.minTimeout;
+    }
+    return ProviderFactory.create(agent.provider_type, merged);
   }
 
   /**

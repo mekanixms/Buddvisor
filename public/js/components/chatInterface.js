@@ -3,6 +3,15 @@
  * Handles chat display and user interactions for multi-agent conversations
  */
 
+const DEFAULT_SUMMARY_PROMPT = `Summarize the conversation excerpt below so the work can continue without rereading it.
+
+Cover:
+- what was asked and decided
+- important facts, figures, and constraints
+- open questions and next steps
+
+Stay faithful to the excerpt. Do not invent details. Write in clear prose.`;
+
 class ChatInterface {
   constructor() {
     this.currentSession = null;
@@ -838,6 +847,7 @@ class ChatInterface {
     this.attachArtifactHandlers();
     this.attachDeleteHandlers();
     this.attachArchiveHandlers();
+    this.attachSummarizeHandlers();
     this.attachCopyHandlers();
     this.attachBookmarkHandlers();
 
@@ -1118,6 +1128,304 @@ class ChatInterface {
   }
 
   /**
+   * Open the summarize dialog for a message.
+   */
+  attachSummarizeHandlers() {
+    document.querySelectorAll('.message-summarize-btn[data-action="summarize-message"]').forEach(btn => {
+      const newBtn = btn.cloneNode(true);
+      btn.parentNode.replaceChild(newBtn, btn);
+
+      const handleSummarize = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const messageId = parseInt(newBtn.dataset.messageId, 10);
+        if (!messageId || !this.currentSession || window.isShareMode) return;
+        this.showSummarizeDialog(messageId);
+      };
+
+      newBtn.addEventListener('click', handleSummarize);
+      newBtn.addEventListener('touchend', handleSummarize);
+    });
+  }
+
+  /**
+   * Dialog: how far back to summarize, which agent writes it, and the prompt.
+   */
+  showSummarizeDialog(messageId) {
+    const existing = document.getElementById('summarizeMessageModal');
+    if (existing) existing.remove();
+
+    const agents = this.currentSession?.agents || [];
+    const agentOptions = [
+      '<option value="">Orchestrator</option>',
+      ...agents.map((agent) => `<option value="${agent.id}">${escapeHtml(agent.name)}</option>`),
+    ].join('');
+
+    const modalHtml = `
+      <div class="modal fade" id="summarizeMessageModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title"><i class="bi bi-text-paragraph me-2"></i>Summarize conversation</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <p class="text-muted small">The summary is inserted immediately after this message.</p>
+              <div class="mb-3">
+                <label class="form-label">How far back</label>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="summarize-scope" id="summarize-scope-count" value="count" checked>
+                  <label class="form-check-label" for="summarize-scope-count">Last N messages, ending at this one</label>
+                </div>
+                <div class="input-group input-group-sm mt-2 ms-4" style="max-width: 16rem;">
+                  <span class="input-group-text">Messages</span>
+                  <input type="number" class="form-control" id="summarize-count" min="1" max="5000" value="10">
+                </div>
+                <div class="form-check mt-2">
+                  <input class="form-check-input" type="radio" name="summarize-scope" id="summarize-scope-all" value="conversation">
+                  <label class="form-check-label" for="summarize-scope-all">All messages from the start of the session through this one</label>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="summarize-agent">Agent</label>
+                <select class="form-select" id="summarize-agent">${agentOptions}</select>
+                <div class="form-text">Uses that agent's model. The orchestrator uses the session orchestrator model.</div>
+              </div>
+              <div class="mb-3">
+                <div class="d-flex align-items-center justify-content-between">
+                  <label class="form-label mb-0" for="summarize-prompt">Prompt</label>
+                  <button type="button" class="btn btn-link btn-sm p-0" id="summarize-reset-prompt">Reset to sample</button>
+                </div>
+                <textarea class="form-control mt-1" id="summarize-prompt" rows="8" maxlength="8000"></textarea>
+              </div>
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="summarize-include-archived" checked>
+                <label class="form-check-label" for="summarize-include-archived">Include archived messages in the excerpt</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="summarize-archive-sources">
+                <label class="form-check-label" for="summarize-archive-sources">Archive the summarized messages afterward</label>
+                <div class="form-text">They stay in the transcript, and later agent turns skip them. The new summary stays in context.</div>
+              </div>
+              <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="summarize-save-file">
+                <label class="form-check-label" for="summarize-save-file">Save to file</label>
+              </div>
+              <div id="summarize-save-panel" class="border rounded p-2 mt-2 d-none">
+                <div class="small mb-1" id="summarize-save-path">Save in: Session folder</div>
+                <div class="list-group list-group-flush border rounded mb-2" id="summarize-folders" style="max-height: 12rem; overflow: auto;"></div>
+                <label class="form-label mb-1" for="summarize-filename">File name</label>
+                <input type="text" class="form-control form-control-sm" id="summarize-filename" value="summary.md" maxlength="255" autocomplete="off">
+                <div class="form-text">.md is added when the name has no extension. A file already in this folder with the same name is replaced.</div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="button" class="btn btn-primary" id="summarize-submit">Summarize</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modalEl = document.getElementById('summarizeMessageModal');
+    const promptEl = modalEl.querySelector('#summarize-prompt');
+    promptEl.value = DEFAULT_SUMMARY_PROMPT;
+
+    const countRadio = modalEl.querySelector('#summarize-scope-count');
+    const allRadio = modalEl.querySelector('#summarize-scope-all');
+    const countInput = modalEl.querySelector('#summarize-count');
+    const syncCountEnabled = () => {
+      countInput.disabled = !countRadio.checked;
+    };
+    countRadio.addEventListener('change', syncCountEnabled);
+    allRadio.addEventListener('change', syncCountEnabled);
+    countInput.addEventListener('focus', () => {
+      countRadio.checked = true;
+      syncCountEnabled();
+    });
+
+    modalEl.querySelector('#summarize-reset-prompt').addEventListener('click', () => {
+      promptEl.value = DEFAULT_SUMMARY_PROMPT;
+    });
+
+    modalEl.dataset.saveFolder = '';
+    const saveCheck = modalEl.querySelector('#summarize-save-file');
+    const savePanel = modalEl.querySelector('#summarize-save-panel');
+    saveCheck.addEventListener('change', () => {
+      savePanel.classList.toggle('d-none', !saveCheck.checked);
+      if (saveCheck.checked) this.loadSummarizeFolders(modalEl);
+    });
+    modalEl.querySelector('#summarize-folders').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-save-path]');
+      if (!btn) return;
+      e.preventDefault();
+      modalEl.dataset.saveFolder = btn.getAttribute('data-save-path') || '';
+      this.loadSummarizeFolders(modalEl);
+    });
+
+    modalEl.querySelector('#summarize-submit').addEventListener('click', () => {
+      this.submitSummarize(messageId, modalEl);
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', () => {
+      modalEl.remove();
+    });
+
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+  }
+
+  /**
+   * List session storage folders so the summary can be saved into one of them.
+   */
+  async loadSummarizeFolders(modalEl) {
+    const listEl = modalEl.querySelector('#summarize-folders');
+    const pathEl = modalEl.querySelector('#summarize-save-path');
+    if (!listEl || !this.currentSession) return;
+
+    const current = modalEl.dataset.saveFolder || '';
+    const parts = current.split('/').filter(Boolean);
+    pathEl.textContent = parts.length ? `Save in: Session folder / ${parts.join(' / ')}` : 'Save in: Session folder';
+    listEl.innerHTML = '<div class="list-group-item text-muted small">Loading folders…</div>';
+
+    try {
+      const response = await api.sessions.listStorage(this.currentSession.id, current);
+      const entries = (response.data?.entries || []).filter((entry) =>
+        entry.type === 'directory' || entry.target_type === 'directory'
+      );
+      const rows = [];
+      if (parts.length) {
+        const parent = parts.slice(0, -1).join('/');
+        rows.push(`
+          <button type="button" class="list-group-item list-group-item-action py-1" data-save-path="${escapeHtml(parent)}">
+            <i class="bi bi-arrow-90deg-up me-1"></i>Up
+          </button>
+        `);
+      }
+      entries.forEach((entry) => {
+        const label = entry.owner_label || entry.name;
+        const detail = entry.owner_label && entry.owner_label !== entry.name
+          ? `<span class="text-muted small ms-1">${escapeHtml(entry.name)}</span>`
+          : '';
+        rows.push(`
+          <button type="button" class="list-group-item list-group-item-action py-1" data-save-path="${escapeHtml(entry.path)}">
+            <i class="bi bi-folder-fill text-warning me-1"></i>${escapeHtml(label)}${detail}
+          </button>
+        `);
+      });
+      if (!entries.length && !parts.length) {
+        rows.push('<div class="list-group-item text-muted small">This session folder has no subfolders. The file is saved in the session folder.</div>');
+      } else if (!entries.length) {
+        rows.push('<div class="list-group-item text-muted small">No folders inside this one.</div>');
+      }
+      listEl.innerHTML = rows.join('');
+    } catch (error) {
+      console.error('Error listing session folders:', error);
+      listEl.innerHTML = `<div class="list-group-item text-danger small">${escapeHtml(error.message || 'Failed to list session folders')}</div>`;
+    }
+  }
+
+  /**
+   * Run the summary request and insert the result after the anchor message.
+   */
+  async submitSummarize(messageId, modalEl) {
+    if (!this.currentSession || this.summarizeInFlight) return;
+
+    const scope = modalEl.querySelector('input[name="summarize-scope"]:checked')?.value || 'count';
+    const count = parseInt(modalEl.querySelector('#summarize-count').value, 10);
+    const agentValue = modalEl.querySelector('#summarize-agent').value;
+    const prompt = modalEl.querySelector('#summarize-prompt').value.trim();
+    const includeArchived = modalEl.querySelector('#summarize-include-archived').checked;
+    const archiveSources = modalEl.querySelector('#summarize-archive-sources').checked;
+    const saveToFile = modalEl.querySelector('#summarize-save-file').checked;
+    const saveFileName = modalEl.querySelector('#summarize-filename').value.trim();
+    const saveFolder = modalEl.dataset.saveFolder || '';
+    const submitBtn = modalEl.querySelector('#summarize-submit');
+
+    if (scope === 'count' && (!Number.isInteger(count) || count < 1)) {
+      showToast('Enter how many messages to summarize', 'warning');
+      return;
+    }
+    if (!prompt) {
+      showToast('Enter a prompt for the summary', 'warning');
+      return;
+    }
+    if (saveToFile && !saveFileName) {
+      showToast('Enter a file name for the summary', 'warning');
+      return;
+    }
+
+    this.summarizeInFlight = true;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Summarizing…';
+
+    try {
+      const payload = {
+        scope,
+        prompt,
+        includeArchived,
+        archiveSources,
+      };
+      if (scope === 'count') payload.count = count;
+      if (agentValue) payload.agentId = parseInt(agentValue, 10);
+      if (saveToFile) {
+        payload.saveToFile = true;
+        payload.saveFolder = saveFolder;
+        payload.saveFileName = saveFileName;
+      }
+
+      const response = await api.chat.summarizeMessage(this.currentSession.id, messageId, payload);
+
+      const summary = response?.data?.message;
+      if (!summary) {
+        throw new Error('Summary was not saved');
+      }
+
+      const anchorIndex = this.messages.findIndex((msg) => Number(msg.id) === Number(messageId));
+      if (anchorIndex >= 0) {
+        this.messages.splice(anchorIndex + 1, 0, summary);
+      } else {
+        this.messages.push(summary);
+      }
+
+      const archivedIds = new Set((response.data.archivedIds || []).map((id) => Number(id)));
+      if (archivedIds.size > 0) {
+        this.messages.forEach((msg) => {
+          if (archivedIds.has(Number(msg.id))) msg.archived = 1;
+        });
+      }
+
+      this.totalMessages += 1;
+      this.lastMessageCount = this.messages.length;
+      this.lastMessageHash = this.getMessageHash();
+      this.renderMessages(false);
+
+      const inserted = document.querySelector(`#chat-messages .chat-message[data-message-id="${summary.id}"]`);
+      if (inserted) inserted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+      const modal = bootstrap.Modal.getInstance(modalEl);
+      modal?.hide();
+      if (response.data?.saveError) {
+        showToast(`Summary added. Could not write the file: ${response.data.saveError}`, 'warning');
+      } else if (response.data?.savedFile?.path) {
+        showToast(`Summary added and saved to ${response.data.savedFile.path}`, 'success');
+      } else {
+        showToast('Summary added', 'success');
+      }
+      this.loadContextTokenEstimates();
+    } catch (error) {
+      console.error('Error summarizing messages:', error);
+      showToast(error.message || 'Failed to summarize messages', 'danger');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Summarize';
+    } finally {
+      this.summarizeInFlight = false;
+    }
+  }
+
+  /**
    * Attach event handlers for message copy buttons
    */
   attachCopyHandlers() {
@@ -1242,6 +1550,48 @@ class ChatInterface {
   }
 
   /**
+   * Summarize messages ending at this one. Shown beside the archive control.
+   * @param {object} message
+   * @param {boolean} onLightBubble - Assistant bubbles are light; user bubbles need a border
+   */
+  renderSummarizeButton(message, onLightBubble = false) {
+    const messageId = Number(message.id);
+    if (!Number.isInteger(messageId) || messageId <= 0 || window.isShareMode) return '';
+    const border = onLightBubble ? '' : 'style="border: 1px solid #dee2e6;"';
+    return `
+      <button type="button" class="message-summarize-btn btn btn-sm ms-2 btn-light"
+              data-message-id="${messageId}"
+              data-action="summarize-message"
+              ${border}
+              title="Summarize messages up to here">
+        <i class="bi bi-text-paragraph"></i>
+      </button>
+    `;
+  }
+
+  /**
+   * Badge for an inserted summary: "AgentName summary of N messages" or "… of conversation".
+   */
+  renderSummaryBadge(message) {
+    let metadata = message?.metadata;
+    if (typeof metadata === 'string') {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch {
+        metadata = null;
+      }
+    }
+    if (!metadata?.is_summary) return '';
+    const summary = metadata.summary || {};
+    const name = summary.agent_name || message.agent_name || 'Agent';
+    const count = Number(summary.message_count) || 0;
+    const label = summary.scope === 'conversation'
+      ? `${name} summary of conversation`
+      : `${name} summary of ${count} message${count === 1 ? '' : 's'}`;
+    return `<span class="badge bg-dark me-2" title="Summary inserted after the previous message">${escapeHtml(label)}</span>`;
+  }
+
+  /**
    * Render a single message
    * @param {object} message - Message object
    * @param {boolean} isArchived - Whether this message is left out of agent context
@@ -1349,6 +1699,7 @@ class ChatInterface {
                 <div class="d-flex align-items-center">
                   ${bookmarkBtn}
                   ${copyBtn}
+                  ${this.renderSummarizeButton(message, false)}
                   ${this.renderArchiveButton(message, inActiveWindow)}
                   ${deleteBtn}
                   <small class="opacity-75">${timestamp}</small>
@@ -1360,9 +1711,10 @@ class ChatInterface {
       `;
     }
 
-    const agentBadge = message.agent_name
+    const summaryBadge = this.renderSummaryBadge(message);
+    const agentBadge = summaryBadge || (message.agent_name
       ? `<span class="badge bg-info me-2">${escapeHtml(message.agent_name)}</span>`
-      : '';
+      : '');
 
     const archivedBadge = isArchived
       ? '<span class="badge bg-secondary ms-2" title="This message is archived and not included in agent context"><i class="bi bi-archive"></i> Archived</span>'
@@ -1414,6 +1766,7 @@ class ChatInterface {
               <div class="d-flex align-items-center ms-auto">
                 ${bookmarkBtn}
                 ${copyBtn}
+                ${this.renderSummarizeButton(message, true)}
                 ${this.renderArchiveButton(message, inActiveWindow)}
                 ${deleteBtn}
                 <small class="text-muted">${timestamp}</small>

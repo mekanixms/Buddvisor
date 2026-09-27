@@ -369,6 +369,83 @@ router.post('/:sessionId/messages/:messageId/archive', [
 });
 
 /**
+ * POST /api/chat/:sessionId/messages/:messageId/summarize
+ * Summarize messages ending at this one and insert the summary immediately after it.
+ */
+router.post('/:sessionId/messages/:messageId/summarize', [
+  param('sessionId').isInt().withMessage('Invalid session ID'),
+  param('messageId').isInt().withMessage('Invalid message ID'),
+  body('scope').isIn(['count', 'conversation']).withMessage('scope must be count or conversation'),
+  body('count').optional({ nullable: true }).isInt({ min: 1, max: 5000 }).withMessage('count must be between 1 and 5000'),
+  body('agentId').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Invalid agent'),
+  body('prompt').trim().isLength({ min: 1, max: 8000 }).withMessage('Prompt must be between 1 and 8000 characters'),
+  body('includeArchived').optional().isBoolean().withMessage('includeArchived must be true or false'),
+  body('archiveSources').optional().isBoolean().withMessage('archiveSources must be true or false'),
+  body('saveToFile').optional().isBoolean().withMessage('saveToFile must be true or false'),
+  body('saveFolder').optional({ nullable: true }).isString().isLength({ max: 1000 }).withMessage('Folder path is too long'),
+  body('saveFileName').optional({ nullable: true }).isString().isLength({ max: 255 }).withMessage('File name is too long'),
+  validate
+], async (req, res, next) => {
+  try {
+    const sessionId = parseInt(req.params.sessionId, 10);
+    const messageId = parseInt(req.params.messageId, 10);
+    const agentId = req.body.agentId == null || req.body.agentId === ''
+      ? null
+      : parseInt(req.body.agentId, 10);
+
+    const result = await ChatService.summarizeFromMessage(
+      sessionId,
+      req.userId,
+      messageId,
+      {
+        scope: req.body.scope,
+        count: req.body.count == null ? null : parseInt(req.body.count, 10),
+        agentId,
+        prompt: req.body.prompt,
+        includeArchived: req.body.includeArchived !== false,
+        archiveSources: req.body.archiveSources === true,
+        saveToFile: req.body.saveToFile === true,
+        saveFolder: req.body.saveFolder || '',
+        saveFileName: req.body.saveFileName || '',
+      }
+    );
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    const known = [
+      'Session not found',
+      'Session not found or access denied',
+      'Unauthorized access to session',
+      'Message not found in this session',
+      'That agent is not assigned to this session',
+      'No messages to summarize in that range',
+      'No orchestrator API key is configured',
+      'The model returned an empty summary',
+      'Choose how many messages to summarize, or the whole conversation up to this message',
+      'Message count must be a positive number',
+      'A summary prompt is required',
+      'Summary prompt is too long',
+      'Agent not found',
+      'Agent is not active',
+      'Not authorized to access this agent',
+      'Enter a file name for the summary',
+      'Enter a file name without a folder path',
+    ];
+    if (known.includes(error.message)) {
+      const status = error.message.includes('not found') || error.message.includes('Unauthorized') || error.message.includes('not authorized')
+        ? 404
+        : 400;
+      return next(new AppError(error.message, status, 'SUMMARY_FAILED'));
+    }
+    logger.error('Summarize message error:', error);
+    next(error);
+  }
+});
+
+/**
  * DELETE /api/chat/:sessionId/messages/:messageId
  * Delete a specific message
  */
