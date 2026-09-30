@@ -17,6 +17,7 @@ const { registerMediaProcessingTool } = require('./src/services/tools/mediaProce
 const { registerSqliteLocalDbTool, cleanupAllDatabases } = require('./src/services/tools/sqliteLocalDbTool');
 const { registerLocalWorkingFolderTool } = require('./src/services/tools/localWorkingFolderTool');
 const { registerWorkspaceExecTool } = require('./src/services/tools/workspaceExecTool');
+const { registerTerminalTool, closeAllTerminals } = require('./src/services/tools/terminalTool');
 const { registerStatePersistTool, stopCleanupInterval } = require('./src/services/tools/statePersistTool');
 const { registerDatetimeTool } = require('./src/services/tools/datetimeTool');
 const { registerSessionPoolTool, stopCleanupInterval: stopSessionPoolCleanupInterval } = require('./src/services/tools/sessionPoolTool');
@@ -167,6 +168,7 @@ registerMediaProcessingTool();
 registerSqliteLocalDbTool();
 registerLocalWorkingFolderTool();
 registerWorkspaceExecTool();
+registerTerminalTool();
 registerStatePersistTool();
 registerDatetimeTool();
 registerSessionPoolTool();
@@ -223,6 +225,13 @@ const gracefulShutdown = async (signal) => {
     stopSessionPoolCleanupInterval();
   } catch (error) {
     logger.error('Error stopping session pool cleanup:', error);
+  }
+
+  // Stop terminal shells and flush terminal logs
+  try {
+    closeAllTerminals();
+  } catch (error) {
+    logger.error('Error closing terminal sessions:', error);
   }
   
   // Checkpoint all agent SQLite databases to ensure data is persisted

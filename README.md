@@ -48,6 +48,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Local SQLite Database Tool**: Agents can create and manage isolated SQLite databases via `sqlite_local_db`
 - **Local Working Folder Tool**: Agents can manage files and directories in isolated workspaces via `local_working_folder`
 - **Workspace Execution Tool**: Agents can execute shell commands within their workspace via `workspace_exec`
+- **Terminal Tool**: Persistent, named interactive shell sessions (Linux/macOS) confined to the agent's workspace via `terminal`, with its own `logs/terminal.log`
 - **State Persistence Tool**: Fast in-memory key-value storage for session variables via `state_persist`
 - **Datetime Tool**: Current date/time (optional format and timezone) via `datetime`
 - **Archived Conversation History Tool**: Read and export conversation history with filtering, chunking, and export capabilities via `archived_conversation_history`
@@ -406,7 +407,7 @@ You can restrict which tools appear in the **Tools view** (`nav-tools`) and **Co
 ```env
 # Comma-separated list of tool names. Only these tools are shown in the UI.
 # If empty or not set, all registered tools are shown.
-ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,state_persist,datetime,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule,calculate_depreciation,categorize_business_expense,calculate_business_ratios,convert_currency
+ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,terminal,state_persist,datetime,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule
 ```
 
 - **Empty or unset:** All registered tools are shown (default behavior).
@@ -672,6 +673,61 @@ Run script with custom environment:
 
 - All commands are automatically logged to `./logs/exec_history.log` in the workspace
 - Logs include timestamp, command, exit code, duration, and output snippets
+
+### Agent Tool: `terminal` (Persistent Terminal Sessions)
+
+Agents can keep one or more **interactive shells open between calls** using the built-in tool **`terminal`**. Unlike `workspace_exec` (one process per command, gone when it exits), a terminal session keeps its working directory, environment variables, logins (`ssh`, `psql`, `sqlite3`, a Python REPL…) and background services alive, so the agent does not spend time and tokens reconnecting or re-creating a shell. **Linux and macOS only** (Windows returns a clear error).
+
+**Requirements:**
+
+- **`local_working_folder` must be configured first**; every session starts in (and is confined to) that workspace
+- `python3` and `bash` on the server (Python is only used as a small PTY bridge, `src/services/tools/terminal/pty_helper.py`; no native npm module is needed). In Docker the image installs `python3`
+- In **Configure Session → Tools**, assign `terminal` to agents via checkbox
+
+**Operations** (`operation` parameter):
+
+| Operation | Purpose |
+|---|---|
+| `run` | Run a shell command to completion (multi-line allowed). Returns `exit_code`, `output`, `cwd`. Session must be at its prompt |
+| `send` | Type input into whatever is in the foreground: REPL, database client, password prompt. `secret: true` keeps the input out of the log. `newline: false` for control characters |
+| `read` | Collect output produced since the last call (e.g. from a service); optional `wait_ms` |
+| `interrupt` | Send Ctrl-C to the foreground program; the shell stays alive |
+| `open` | Explicitly create a session (optional `cwd`, `env`, `idle_timeout_ms`). `run`/`send` create `main` on demand |
+| `list` / `close` | Show or end the agent's sessions |
+| `tail_log` | Last lines of `logs/terminal.log` (optionally one session) |
+
+**Named sessions:** `session` (default `main`; letters, digits, `_`, `-`, max 32) lets one agent run e.g. a `db` client and a `server` side by side. Sessions are scoped per work session **and** per agent: an agent can never reach another agent's shells.
+
+**Result shape:** `status` is `done` (back at the prompt), `running` (a program is still in the foreground) or `exited`; plus `exit_code`, `cwd` (relative to the workspace) and `output`. Output is trimmed to `max_output_chars` (default 4000, max 20000), keeping the start and end, so tool results stay small. Output from background jobs that arrived between calls is returned separately as `background_output`.
+
+**Filesystem jail:**
+
+- Every shell starts in the workspace. After each call the tool checks the shell's directory and returns it to the workspace root if `cd` left it (reported in `note`)
+- The shell gets a minimal environment (`HOME` = the workspace); server secrets such as `JWT_SECRET` or API keys are **not** passed
+- `sudo`, `su` and `doas` commands are refused
+- **OS-level jail when available** (self-tested at first use): Linux uses [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`): read-only system, writable workspace and private `/tmp`, the app directory and the user's home are hidden, separate PID namespace. macOS uses `sandbox-exec`: writes only in the workspace/temp dirs, file contents under the app directory and home are unreadable. Assigned documents stay readable (read-only) because their real files are bound in at session start
+- If no OS-level jail works on the host (no `bwrap`, unprivileged namespaces disabled, most default Docker containers) the session runs with the **soft jail only**, which is not a security boundary against a hostile command. The result of `open`/first `run` reports `jail: "bwrap" | "sandbox-exec" | "soft"`. Set `TERMINAL_SANDBOX=required` to refuse instead of degrading
+- Network access is not restricted (clients such as `ssh` and `psql` are the point of the tool)
+
+**Logging:** `./logs/terminal.log` in the workspace, separate from `logs/exec_history.log`. Compact lines: `<time> <session>$ <input>`, `<time> <session># <event>`, `<session>| <output line>`. Output lines are truncated (300 chars) and the file rotates to a single `terminal.log.1` backup at 1 MB.
+
+**Lifetime and limits:** sessions close after 30 minutes without use (per-session `idle_timeout_ms` on `open`, capped), when the agent calls `close`, and on server shutdown. Defaults: 4 sessions per agent, 24 server-wide. A server restart ends all shells (logs remain). Lines sent to the terminal are limited to 3800 characters (PTY line limit); write larger content to a file with `local_working_folder` and run it.
+
+**Environment variables (all optional):**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TERMINAL_SANDBOX` | `auto` | `auto` (OS jail if available), `off` (soft jail only), `required` (fail without OS jail) |
+| `TERMINAL_JAIL_HIDE_PATHS` | | Extra comma-separated paths to hide inside the OS jail |
+| `TERMINAL_JAIL_ALLOW_READ` | | Comma-separated paths to make readable again (e.g. a toolchain under the home directory) |
+| `TERMINAL_IDLE_TIMEOUT_MS` | `1800000` | Default idle lifetime of a session |
+| `TERMINAL_MAX_IDLE_TIMEOUT_MS` | `28800000` | Upper cap for per-session `idle_timeout_ms` |
+| `TERMINAL_MAX_SESSIONS_PER_AGENT` | `4` | Open sessions per agent |
+| `TERMINAL_MAX_SESSIONS` | `24` | Open sessions on the server |
+| `TERMINAL_LOG_MAX_BYTES` | `1048576` | Rotation size for `terminal.log` |
+| `TERMINAL_LOG_MAX_LINE_CHARS` | `300` | Max characters kept per logged output line |
+
+**Tests:** `npm test -- tests/terminal` (the PTY tests skip themselves on hosts that cannot allocate a PTY).
 
 ### Agent Tool: `datetime` (Current Date/Time)
 

@@ -2,6 +2,11 @@ FROM node:18-slim
 
 WORKDIR /app
 
+# python3 is required by the `terminal` agent tool (PTY bridge)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first (better layer caching)
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
