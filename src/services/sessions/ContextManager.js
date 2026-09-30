@@ -280,6 +280,9 @@ class ContextManager {
     prompt += `- When uncertain, acknowledge limitations and suggest consulting a specialist\n`;
     prompt += `- Reference your assigned documents when they contain relevant information\n`;
     prompt += `- Use your assigned tools when appropriate\n`;
+    if (agentTools.includes('send_to_telegram')) {
+      prompt += `- To send a file to the linked Telegram chat, call send_to_telegram with the file path or document name. Do not embed the file as HTML or a base64 image.\n`;
+    }
     prompt += `- Collaborate with team members when their expertise would be helpful\n`;
 
     return prompt;

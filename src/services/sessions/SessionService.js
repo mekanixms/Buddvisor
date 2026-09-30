@@ -14,7 +14,7 @@ const {
 
 // Orchestrator tools that are pre-assigned to new sessions. They remain ordinary
 // assignments, so the user can untick them in Configure Session → Tools.
-const DEFAULT_ORCHESTRATOR_TOOLS = ['manage_agent_documents', 'manage_agent_tools'];
+const DEFAULT_ORCHESTRATOR_TOOLS = ['manage_agent_documents', 'manage_agent_tools', 'send_to_telegram'];
 
 class SessionService {
   static DEFAULT_ORCHESTRATOR_TOOLS = DEFAULT_ORCHESTRATOR_TOOLS;

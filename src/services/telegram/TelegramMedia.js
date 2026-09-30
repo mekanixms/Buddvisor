@@ -26,6 +26,12 @@ const MIME_BY_EXTENSION = {
   '.mp4': 'video/mp4',
   '.mov': 'video/quicktime',
   '.webm': 'video/webm',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.zip': 'application/zip',
+  '.svg': 'image/svg+xml',
 };
 
 const MIME_ALIASES = {
@@ -155,7 +161,7 @@ function extractAttachment(message) {
   }
   if (message.voice && message.voice.file_id) {
     return build('voice', message, message.voice, {
-      prefix: 'voice', defaultExt: '.ogg', defaultMime: 'audio/ogg',
+      prefix: 'audio', defaultExt: '.ogg', defaultMime: 'audio/ogg',
     });
   }
   return null;
@@ -168,10 +174,167 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function mimeForFilename(filename) {
+  const ext = path.extname(String(filename || '')).toLowerCase();
+  return MIME_BY_EXTENSION[ext] || 'application/octet-stream';
+}
+
+const PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
+const PHOTO_LIMIT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Bot API method for an outbound file. Images that Telegram can show inline go
+ * out as photos; everything else keeps its filename as a document, video, or audio.
+ */
+function telegramUploadMethod(mimeType, size) {
+  const mime = normalizeMime(mimeType);
+  const bytes = Number(size) || 0;
+  if (PHOTO_TYPES.has(mime) && bytes > 0 && bytes <= PHOTO_LIMIT_BYTES) {
+    return { method: 'sendPhoto', field: 'photo' };
+  }
+  if (mime.startsWith('video/') && bytes <= UPLOAD_LIMIT_BYTES) {
+    return { method: 'sendVideo', field: 'video' };
+  }
+  if ((mime.startsWith('audio/') || mime === 'application/ogg') && bytes <= UPLOAD_LIMIT_BYTES) {
+    return { method: 'sendAudio', field: 'audio' };
+  }
+  return { method: 'sendDocument', field: 'document' };
+}
+
+const DATA_URI_RE = /data:([a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+);base64,([A-Za-z0-9+/=\r\n]+)/g;
+const MIN_EMBEDDED_BYTES = 32;
+
+function filenameBefore(before) {
+  const headings = [...before.matchAll(/<h[1-6][^>]*>\s*([^<]{1,120}?)\s*<\/h[1-6]>/gi)];
+  if (headings.length > 0) {
+    const name = sanitizeFilename(headings[headings.length - 1][1]);
+    if (name && path.extname(name)) return name;
+  }
+  const matches = before.match(/[A-Za-z0-9][\w .()-]{0,80}\.[A-Za-z0-9]{2,8}/g);
+  if (!matches) return null;
+  const name = sanitizeFilename(matches[matches.length - 1].trim());
+  if (!name || !path.extname(name)) return null;
+  return name;
+}
+
+function uniqueFilename(name, used) {
+  const key = name.toLowerCase();
+  if (!used.has(key)) {
+    used.add(key);
+    return name;
+  }
+  const ext = path.extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  let n = 2;
+  let candidate = `${stem}_${n}${ext}`;
+  while (used.has(candidate.toLowerCase())) {
+    n += 1;
+    candidate = `${stem}_${n}${ext}`;
+  }
+  used.add(candidate.toLowerCase());
+  return candidate;
+}
+
+/**
+ * Pull embedded data-URI files out of assistant text (the HTML "attached" card
+ * an agent writes when it has no way to upload). Returns the text with those
+ * payloads removed, plus the decoded files.
+ */
+function pullDataUris(text, used) {
+  const files = [];
+  let changed = false;
+  let out = '';
+  let last = 0;
+  const re = new RegExp(DATA_URI_RE.source, 'g');
+  let match = re.exec(text);
+  while (match) {
+    const cleaned = match[2].replace(/\s/g, '');
+    out += text.slice(last, match.index);
+    last = match.index + match[0].length;
+
+    const invalid = cleaned.length < 16 || cleaned.length % 4 === 1;
+    const buffer = invalid ? null : Buffer.from(cleaned, 'base64');
+    if (!buffer || buffer.length < MIN_EMBEDDED_BYTES) {
+      out += match[0];
+    } else {
+      changed = true;
+      const mimeType = normalizeMime(match[1]) || 'application/octet-stream';
+      const hinted = filenameBefore(text.slice(Math.max(0, match.index - 2000), match.index));
+      const fallback = `file${EXTENSION_BY_MIME[mimeType] || ''}` || 'file';
+      const filename = uniqueFilename(hinted || fallback, used);
+      if (buffer.length > UPLOAD_LIMIT_BYTES) {
+        out += `[${filename} is too large to send on Telegram]`;
+      } else {
+        files.push({ filename, mimeType, buffer });
+      }
+    }
+    match = re.exec(text);
+  }
+  out += text.slice(last);
+  return { text: out, files, changed };
+}
+
+function stripTags(text) {
+  return String(text || '').replace(/<[^>]+>/g, ' ');
+}
+
+function cardCaptionOnly(text, files) {
+  let rest = String(text || '');
+  for (const file of files) {
+    const escaped = file.filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    rest = rest.replace(new RegExp(escaped, 'ig'), '');
+  }
+  rest = rest.replace(/rendered directly from assigned session storage\.?/ig, '');
+  return rest.replace(/\s+/g, '') === '';
+}
+
+function extractOutboundMedia(content) {
+  const used = new Set();
+  const files = [];
+  let text = String(content == null ? '' : content);
+
+  text = text.replace(/```(?:html|iframe)[^\n]*\r?\n?([\s\S]*?)```/gi, (full, inner) => {
+    const pulled = pullDataUris(inner, used);
+    if (!pulled.changed) return full;
+    files.push(...pulled.files);
+    if (pulled.files.length === 0) return stripTags(pulled.text).trim();
+    return '';
+  });
+
+  const rest = pullDataUris(text, used);
+  files.push(...rest.files);
+  text = rest.text;
+
+  if (files.length > 0 || rest.changed) {
+    const sentNames = new Set(files.map((file) => file.filename.toLowerCase()));
+    text = stripTags(text)
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !/^rendered directly from assigned session storage\.?$/i.test(line))
+      .filter((line) => !sentNames.has(line.toLowerCase()))
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (files.length > 0 && cardCaptionOnly(text, files)) text = '';
+  } else {
+    text = text.trim();
+  }
+
+  return { text, files };
+}
+
 module.exports = {
   extractAttachment,
+  extractOutboundMedia,
   normalizeMime,
   sanitizeFilename,
   formatBytes,
+  mimeForFilename,
+  telegramUploadMethod,
   MIME_BY_EXTENSION,
+  UPLOAD_LIMIT_BYTES,
 };

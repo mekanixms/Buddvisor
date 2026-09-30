@@ -1,4 +1,11 @@
-const { extractAttachment, normalizeMime, sanitizeFilename, formatBytes } = require('../../src/services/telegram/TelegramMedia');
+const {
+  extractAttachment,
+  extractOutboundMedia,
+  normalizeMime,
+  sanitizeFilename,
+  formatBytes,
+  telegramUploadMethod,
+} = require('../../src/services/telegram/TelegramMedia');
 
 describe('extractAttachment', () => {
   test('returns null for plain text and unsupported kinds', () => {
@@ -40,7 +47,9 @@ describe('extractAttachment', () => {
     expect(extractAttachment({ ...base, animation: { file_id: 'g' } })).toMatchObject({ kind: 'animation', mimeType: 'video/mp4' });
     expect(extractAttachment({ ...base, video_note: { file_id: 'n' } })).toMatchObject({ kind: 'video_note', mimeType: 'video/mp4' });
     expect(extractAttachment({ ...base, audio: { file_id: 'a', mime_type: 'audio/mpeg' } }).filename).toMatch(/\.mp3$/);
-    expect(extractAttachment({ ...base, voice: { file_id: 'o' } })).toMatchObject({ kind: 'voice', mimeType: 'audio/ogg' });
+    expect(extractAttachment({ ...base, voice: { file_id: 'o', file_unique_id: 'VOICE1' } })).toMatchObject({
+      kind: 'voice', mimeType: 'audio/ogg', filename: 'audio_20231114_221320_VOICE1.ogg',
+    });
   });
 
   test('reports the declared size', () => {
@@ -67,5 +76,38 @@ describe('helpers', () => {
     expect(formatBytes(500)).toBe('500 B');
     expect(formatBytes(2048)).toBe('2.0 KB');
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB');
+  });
+
+  test('telegramUploadMethod picks a photo for an inline image and a document otherwise', () => {
+    expect(telegramUploadMethod('image/jpeg', 1000)).toEqual({ method: 'sendPhoto', field: 'photo' });
+    expect(telegramUploadMethod('image/jpeg', 11 * 1024 * 1024)).toEqual({ method: 'sendDocument', field: 'document' });
+    expect(telegramUploadMethod('video/mp4', 1000)).toEqual({ method: 'sendVideo', field: 'video' });
+    expect(telegramUploadMethod('audio/ogg', 1000)).toEqual({ method: 'sendAudio', field: 'audio' });
+    expect(telegramUploadMethod('application/zip', 1000)).toEqual({ method: 'sendDocument', field: 'document' });
+  });
+});
+
+describe('extractOutboundMedia', () => {
+  const payload = Buffer.alloc(40, 7).toString('base64');
+
+  test('lifts an HTML attachment card into a file and drops the card text', () => {
+    const html = `<div class="card"><h2>trigRatios.jpeg</h2><p class="desc">Rendered directly from assigned session storage</p><img src="data:image/jpeg;base64,${payload}"></div>`;
+    const { text, files } = extractOutboundMedia(html);
+    expect(text).toBe('');
+    expect(files).toHaveLength(1);
+    expect(files[0].filename).toBe('trigRatios.jpeg');
+    expect(files[0].mimeType).toBe('image/jpeg');
+    expect(files[0].buffer.equals(Buffer.alloc(40, 7))).toBe(true);
+  });
+
+  test('keeps the prose around an html fence and still extracts the file', () => {
+    const content = `Here is the chart.\n\n\`\`\`html\n<h2>trigRatios.jpeg</h2>\n<img src="data:image/jpeg;base64,${payload}">\n\`\`\``;
+    const { text, files } = extractOutboundMedia(content);
+    expect(text).toBe('Here is the chart.');
+    expect(files[0].filename).toBe('trigRatios.jpeg');
+  });
+
+  test('leaves ordinary text alone', () => {
+    expect(extractOutboundMedia('Sent nothing.')).toEqual({ text: 'Sent nothing.', files: [] });
   });
 });

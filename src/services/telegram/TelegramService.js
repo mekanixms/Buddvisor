@@ -17,9 +17,15 @@ const { AppError } = require('../../middleware/errorHandler');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const messageEvents = require('../../utils/messageEvents');
-const { extractAttachment, formatBytes } = require('./TelegramMedia');
+const {
+  extractAttachment,
+  extractOutboundMedia,
+  formatBytes,
+  normalizeMime,
+  telegramUploadMethod,
+} = require('./TelegramMedia');
 
-const SUPPORTED_FILES_HINT = 'PDF, Word, Excel, CSV, TXT/MD/HTML/JSON, PNG/JPEG images, MP3/WAV/M4A audio and MP4/MOV/WEBM video';
+const TELEGRAM_DOWNLOADS_DIR = 'TelegramDownloads';
 
 const MIRROR_ROLES = new Set(['user', 'assistant', 'system']);
 const MIRROR_MAX_PENDING = 200;
@@ -221,6 +227,108 @@ class TelegramService {
     }
   }
 
+  /**
+   * Upload a file to one chat. Images Telegram can display inline are sent as
+   * photos; other types keep their filename as a document, video, or audio.
+   */
+  static async sendFile(token, chatId, file) {
+    const attempt = async () => {
+      const { method, field } = telegramUploadMethod(file.mimeType, file.buffer.length);
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      const caption = file.caption ? String(file.caption).slice(0, 1024) : '';
+      if (caption) form.append('caption', caption);
+      const filename = file.filename || 'file';
+      const mimeType = normalizeMime(file.mimeType) || 'application/octet-stream';
+      form.append(field, new Blob([file.buffer], { type: mimeType }), filename);
+      try {
+        const res = await axios.post(`${API_BASE()}/bot${token}/${method}`, form, {
+          timeout: 120000,
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity,
+        });
+        if (!res.data || res.data.ok !== true) {
+          const error = new Error(`Telegram ${method} failed: ${(res.data && res.data.description) || 'unexpected response'}`);
+          error.status = null;
+          throw error;
+        }
+        return { method };
+      } catch (err) {
+        if (err && err.status !== undefined && String(err.message || '').startsWith('Telegram ')) throw err;
+        throw botApiError(method, err, token);
+      }
+    };
+
+    try {
+      return await attempt();
+    } catch (err) {
+      if (err.status === 429 && err.retryAfter != null && err.retryAfter <= MAX_RETRY_AFTER_SECONDS) {
+        await new Promise((resolve) => setTimeout(resolve, err.retryAfter * 1000));
+        return attempt();
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Upload one file to every chat linked to the session.
+   * A chat that blocked the bot is unlinked.
+   */
+  static async sendFileToLinkedChats(sessionId, file) {
+    const poller = TelegramService.pollers.get(sessionId) || TelegramService.pollers.get(Number(sessionId));
+    if (!poller) {
+      return {
+        success: false,
+        error: 'Telegram is not connected for this session. Connect a bot in Configure Session → Telegram.',
+      };
+    }
+
+    const chats = await SessionTelegram.listChats(sessionId);
+    if (!chats || chats.length === 0) {
+      return {
+        success: false,
+        error: 'No Telegram chat is linked to this session. Link one from Configure Session → Telegram.',
+      };
+    }
+
+    const failed = [];
+    let chatsSent = 0;
+    let method = null;
+    for (const chat of chats) {
+      try {
+        const sent = await TelegramService.sendFile(poller.token, chat.chat_id, file);
+        chatsSent += 1;
+        method = method || sent.method;
+      } catch (err) {
+        if (err.status === 403) {
+          logger.info(`Telegram chat ${chat.chat_id} blocked the bot; unlinking it from session ${sessionId}`);
+          await SessionTelegram.removeChatByChatId(sessionId, chat.chat_id).catch(() => {});
+        } else {
+          logger.warn(`Telegram file delivery to chat ${chat.chat_id} failed (session ${sessionId}): ${err.message}`);
+        }
+        failed.push({ chat_id: String(chat.chat_id), error: err.message });
+      }
+    }
+
+    if (chatsSent === 0) {
+      return {
+        success: false,
+        error: (failed[0] && failed[0].error) || 'No linked chat received the file.',
+        filename: file.filename,
+        failed,
+      };
+    }
+
+    return {
+      success: true,
+      filename: file.filename,
+      bytes: file.buffer.length,
+      chats_sent: chatsSent,
+      method,
+      failed,
+    };
+  }
+
   static async sendText(token, chatId, text) {
     for (const chunk of splitMessage(text)) {
       const payload = { chat_id: chatId, text: chunk, disable_web_page_preview: true };
@@ -378,14 +486,24 @@ class TelegramService {
     const originChatId = message.role === 'user' && meta.channel === 'telegram' && meta.telegram_chat_id != null
       ? String(meta.telegram_chat_id)
       : null;
-    const text = TelegramService.formatForwardedText(message, meta);
+    const raw = String(message.content).trim();
+    const extracted = message.role === 'assistant'
+      ? extractOutboundMedia(raw)
+      : { text: raw, files: [] };
+    const text = extracted.text
+      ? TelegramService.formatForwardedText({ ...message, content: extracted.text }, meta)
+      : '';
 
     const chats = await SessionTelegram.listChats(sessionId);
     for (const chat of chats) {
       // The chat that typed the message already has it on screen
       if (originChatId && String(chat.chat_id) === originChatId) continue;
       try {
-        await TelegramService.sendText(poller.token, chat.chat_id, text);
+        if (text) await TelegramService.sendText(poller.token, chat.chat_id, text);
+        for (const file of extracted.files) {
+          const caption = message.agent_name ? `${message.agent_name}: ${file.filename}` : file.filename;
+          await TelegramService.sendFile(poller.token, chat.chat_id, { ...file, caption });
+        }
       } catch (err) {
         if (err.status === 403) {
           logger.info(`Telegram chat ${chat.chat_id} blocked the bot; unlinking it from session ${sessionId}`);
@@ -647,7 +765,7 @@ class TelegramService {
         return;
       }
       if (name === 'help') {
-        await reply('Send any message to chat with the session.\nPhotos, videos and files are saved to the session documents (assigned to the orchestrator); a caption is sent as your message.\n/status shows the session\n/unlink disconnects this chat');
+        await reply('Send any message to chat with the session.\nPhotos, videos and supported files are saved to the session documents (assigned to the orchestrator). Other files, including voice messages, are saved as files in the orchestrator working folder under TelegramDownloads. A caption is sent as your message.\nAsk the session to send a file and it is uploaded into this chat.\n/status shows the session\n/unlink disconnects this chat');
         return;
       }
       await reply('Unknown command. Send /help for the list.');
@@ -683,22 +801,147 @@ class TelegramService {
   }
 
   /**
+   * Write a file the document pipeline cannot index into the orchestrator's
+   * working folder, under TelegramDownloads. Returns null when that folder
+   * is not configured.
+   */
+  static async writeOrchestratorDownload(sessionId, attachment, buffer) {
+    const fs = require('fs').promises;
+    const path = require('path');
+    const { getWorkspacePathForOrchestrator, resolveWorkspacePath } = require('../tools/localWorkingFolderTool');
+
+    const workspace = await getWorkspacePathForOrchestrator(sessionId);
+    if (!workspace) return null;
+
+    await fs.mkdir(resolveWorkspacePath(TELEGRAM_DOWNLOADS_DIR, workspace), { recursive: true });
+
+    const safeName = path.basename(attachment.filename || '') || 'file';
+    const extension = path.extname(safeName);
+    const stem = extension ? safeName.slice(0, -extension.length) : safeName;
+    let filename = safeName;
+    let absolutePath;
+    for (let n = 2; ; n += 1) {
+      absolutePath = resolveWorkspacePath(path.join(TELEGRAM_DOWNLOADS_DIR, filename), workspace);
+      try {
+        await fs.access(absolutePath);
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+        break;
+      }
+      if (n > 1000) throw new Error('Too many files with the same name in TelegramDownloads.');
+      filename = `${stem}_${n}${extension}`;
+    }
+
+    await fs.writeFile(absolutePath, buffer);
+    return {
+      filename,
+      relativePath: `${TELEGRAM_DOWNLOADS_DIR}/${filename}`,
+      bytes: buffer.length,
+    };
+  }
+
+  /**
+   * Record an upload in the conversation. A caption is sent through the chat
+   * pipeline; without one, only a context message is stored.
+   */
+  static async recordAttachment(ctx, { session, chat, origin, reply }, { caption, note, metadata, confirmation }) {
+    const { sessionId } = ctx;
+    await reply(confirmation).catch((err) => logger.warn(`Telegram confirmation failed (session ${sessionId}): ${err.message}`));
+
+    if (caption) {
+      await TelegramService.runChat(ctx, { session, chat, origin, reply }, `${caption}\n\n[Attached via Telegram: ${note}]`);
+      return;
+    }
+
+    try {
+      const Message = require('../../models/Message');
+      await Message.create({
+        session_id: sessionId,
+        role: 'user',
+        content: note,
+        metadata: { ...origin, ...metadata },
+      });
+      await require('../sessions/AutoSaveService').autoSave(sessionId, 'message').catch(() => {});
+    } catch (err) {
+      logger.warn(`Could not record Telegram upload in session ${sessionId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Save a file the session document pipeline does not accept (zip, voice note, ...)
+   * into TelegramDownloads in the orchestrator working folder.
+   */
+  static async saveUnsupportedAttachment(ctx, { session, chat, origin, reply }, attachment, caption) {
+    const { sessionId, token } = ctx;
+    const { getWorkspacePathForOrchestrator } = require('../tools/localWorkingFolderTool');
+
+    const workspace = await getWorkspacePathForOrchestrator(sessionId);
+    if (!workspace) {
+      const what = attachment.kind === 'voice'
+        ? 'Voice messages are saved as audio'
+        : `"${attachment.filename}" is not a session-document type, so it would be saved as a file`;
+      await reply(
+        `${what} in the orchestrator working folder (${TELEGRAM_DOWNLOADS_DIR}), but local_working_folder is not configured for the orchestrator. Set a folder name in Configure Session > Tools, then send the file again.`
+      );
+      return;
+    }
+
+    TelegramService.api(token, 'sendChatAction', { chat_id: chat.id, action: 'upload_document' }).catch(() => {});
+
+    let saved;
+    try {
+      const buffer = await TelegramService.downloadFile(token, attachment.fileId);
+      const limit = maxDownloadBytes();
+      if (buffer.length > limit) {
+        await reply(`"${attachment.filename}" is ${formatBytes(buffer.length)}; the limit for Telegram uploads is ${formatBytes(limit)}.`);
+        return;
+      }
+      saved = await TelegramService.writeOrchestratorDownload(sessionId, attachment, buffer);
+    } catch (err) {
+      logger.error(`Telegram file save failed (session ${sessionId}): ${describeError(err, token)}`);
+      await reply(`Could not save "${attachment.filename}": ${String(describeError(err, token)).slice(0, 300)}`).catch(() => {});
+      return;
+    }
+
+    if (!saved) {
+      await reply(`Could not save "${attachment.filename}": the orchestrator working folder is not available.`);
+      return;
+    }
+
+    const sizeLabel = formatBytes(saved.bytes);
+    const confirmation = attachment.kind === 'voice'
+      ? `Saved the voice message as audio in the orchestrator working folder: ${saved.relativePath} (${sizeLabel}).`
+      : `Saved "${saved.filename}" (${sizeLabel}) in the orchestrator working folder: ${saved.relativePath}. This type is not added to the session documents.`;
+    const note = attachment.kind === 'voice'
+      ? `Voice message saved as audio at ${saved.relativePath} in the orchestrator working folder (${sizeLabel}).`
+      : `Uploaded "${saved.filename}" (${sizeLabel}) via Telegram to ${saved.relativePath} in the orchestrator working folder.`;
+
+    await TelegramService.recordAttachment(ctx, { session, chat, origin, reply }, {
+      caption,
+      note,
+      confirmation,
+      metadata: { filename: saved.filename, download_path: saved.relativePath },
+    });
+  }
+
+  /**
    * Save a photo/video/file sent from Telegram into the session documents
    * (assigned to the orchestrator) and record it in the conversation.
+   * Types the document pipeline cannot index are written to the orchestrator
+   * working folder instead.
    */
   static async handleAttachment(ctx, { session, chat, origin, reply }, attachment, caption) {
     const { sessionId, token } = ctx;
     const DocumentProcessor = require('../documents/DocumentProcessor');
 
-    if (!DocumentProcessor.isSupported(attachment.mimeType)) {
-      const what = attachment.kind === 'voice' ? 'Voice messages' : `Files of type ${attachment.mimeType || 'unknown'}`;
-      await reply(`${what} are not supported. Supported: ${SUPPORTED_FILES_HINT}.`);
-      return;
-    }
-
     const limit = Math.min(maxDownloadBytes(), DocumentProcessor.getMaxFileSize());
     if (attachment.fileSize != null && attachment.fileSize > limit) {
       await reply(`"${attachment.filename}" is ${formatBytes(attachment.fileSize)}; the limit for Telegram uploads is ${formatBytes(limit)}.`);
+      return;
+    }
+
+    if (!DocumentProcessor.isSupported(attachment.mimeType)) {
+      await TelegramService.saveUnsupportedAttachment(ctx, { session, chat, origin, reply }, attachment, caption);
       return;
     }
 

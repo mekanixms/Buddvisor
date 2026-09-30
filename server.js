@@ -28,6 +28,7 @@ const { registerConversationRoundsTool } = require('./src/services/tools/convers
 const { registerSessionScheduleTool } = require('./src/services/tools/sessionScheduleTool');
 const { registerAgentDocumentsTool } = require('./src/services/tools/agentDocumentsTool');
 const { registerAgentToolsTool } = require('./src/services/tools/agentToolsTool');
+const { registerTelegramSendTool } = require('./src/services/tools/telegramSendTool');
 const { schedulerService } = require('./src/services/scheduler/SchedulerService');
 const TelegramService = require('./src/services/telegram/TelegramService');
 const { toolRegistry } = require('./src/services/tools/ToolRegistry');
@@ -184,6 +185,7 @@ registerConversationRoundsTool();
 registerSessionScheduleTool();
 registerAgentDocumentsTool();
 registerAgentToolsTool();
+registerTelegramSendTool();
 logger.info(`Registered ${toolRegistry.count} built-in tools`);
 
 // Run database migrations and start server

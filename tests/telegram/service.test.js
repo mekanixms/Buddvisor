@@ -62,8 +62,27 @@ jest.mock('../../src/services/sessions/AutoSaveService', () => ({
   autoSave: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../../src/services/tools/localWorkingFolderTool', () => {
+  const path = require('path');
+  return {
+    getWorkspacePathForOrchestrator: jest.fn(),
+    resolveWorkspacePath: (relativePath, workspacePath) => {
+      const resolved = path.resolve(workspacePath, relativePath);
+      const root = path.resolve(workspacePath);
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        throw new Error(`Path traversal detected: ${relativePath}`);
+      }
+      return resolved;
+    },
+  };
+});
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const axios = require('axios');
 const WorkSession = require('../../src/models/WorkSession');
+const { getWorkspacePathForOrchestrator } = require('../../src/services/tools/localWorkingFolderTool');
 const SessionTelegram = require('../../src/models/SessionTelegram');
 const { ChatService } = require('../../src/services/chat/ChatService');
 const TelegramService = require('../../src/services/telegram/TelegramService');
@@ -273,6 +292,7 @@ describe('media intake', () => {
       document: { id: 42, user_id: userId, filename: file.originalname },
     }));
     Message.create.mockResolvedValue({});
+    getWorkspacePathForOrchestrator.mockReset();
   });
 
   test('a photo is downloaded, stored for the owner and added to the session without agent rows', async () => {
@@ -374,19 +394,94 @@ describe('media intake', () => {
     expect(sentTexts()[0]).toMatch(/Could not save/);
   });
 
-  test('unsupported types are refused before downloading', async () => {
+  test('unsupported files are not downloaded when the orchestrator has no working folder', async () => {
+    getWorkspacePathForOrchestrator.mockResolvedValue(null);
+
     await TelegramService.handleMessage(ctx, privateMessage(undefined, {
       text: undefined,
-      voice: { file_id: 'v1', file_size: 1000 },
+      document: { file_id: 'z', file_name: 'archive.zip', mime_type: 'application/zip', file_size: 1000 },
     }));
+
+    expect(axios.get).not.toHaveBeenCalled();
+    expect(sentTexts()[0]).toMatch(/local_working_folder is not configured/);
+    expect(ChatService.processMessage).not.toHaveBeenCalled();
+  });
+
+  test('an unsupported file is saved in the orchestrator TelegramDownloads folder', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-downloads-'));
+    getWorkspacePathForOrchestrator.mockResolvedValue(workspace);
+
+    await TelegramService.handleMessage(ctx, privateMessage(undefined, {
+      text: undefined,
+      document: { file_id: 'z', file_name: 'archive.zip', mime_type: 'application/zip', file_size: bytes.length },
+    }));
+
+    const saved = path.join(workspace, 'TelegramDownloads', 'archive.zip');
+    expect(fs.readFileSync(saved)).toEqual(bytes);
+    expect(WorkSession.assignDocument).not.toHaveBeenCalled();
+    expect(ChatService.processMessage).not.toHaveBeenCalled();
+    expect(sentTexts()[0]).toMatch(/TelegramDownloads\/archive\.zip/);
+    expect(Message.create).toHaveBeenCalledWith(expect.objectContaining({
+      session_id: 7,
+      role: 'user',
+      content: expect.stringMatching(/TelegramDownloads\/archive\.zip/),
+      metadata: expect.objectContaining({ channel: 'telegram', download_path: 'TelegramDownloads/archive.zip' }),
+    }));
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test('a voice message is saved as an audio file in TelegramDownloads', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-voice-'));
+    getWorkspacePathForOrchestrator.mockResolvedValue(workspace);
+
+    await TelegramService.handleMessage(ctx, privateMessage(undefined, {
+      text: undefined,
+      date: 1700000000,
+      voice: { file_id: 'v1', file_unique_id: 'VOICE1', file_size: bytes.length, mime_type: 'audio/ogg' },
+    }));
+
+    const files = fs.readdirSync(path.join(workspace, 'TelegramDownloads'));
+    expect(files).toEqual(['audio_20231114_221320_VOICE1.ogg']);
+    expect(fs.readFileSync(path.join(workspace, 'TelegramDownloads', files[0]))).toEqual(bytes);
+    expect(sentTexts()[0]).toMatch(/Saved the voice message as audio/);
+    expect(sentTexts()[0]).toMatch(/TelegramDownloads\/audio_20231114_221320_VOICE1\.ogg/);
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test('a caption on an unsupported file is sent through the chat pipeline', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-caption-'));
+    getWorkspacePathForOrchestrator.mockResolvedValue(workspace);
+    ChatService.processMessage.mockResolvedValue({ message: 'unzipped' });
+
+    await TelegramService.handleMessage(ctx, privateMessage(undefined, {
+      text: undefined,
+      document: { file_id: 'z', file_name: 'archive.zip', mime_type: 'application/zip' },
+      caption: 'please unpack this',
+    }));
+
+    expect(ChatService.processMessage).toHaveBeenCalledWith(
+      7,
+      1,
+      expect.stringMatching(/^please unpack this\n\n\[Attached via Telegram: .*TelegramDownloads\/archive\.zip/),
+      expect.objectContaining({ metadataExtra: expect.objectContaining({ channel: 'telegram' }) })
+    );
+    expect(Message.create).not.toHaveBeenCalled();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test('a second copy of the same file name gets a numeric suffix', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-dup-'));
+    fs.mkdirSync(path.join(workspace, 'TelegramDownloads'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'TelegramDownloads', 'archive.zip'), 'old');
+    getWorkspacePathForOrchestrator.mockResolvedValue(workspace);
+
     await TelegramService.handleMessage(ctx, privateMessage(undefined, {
       text: undefined,
       document: { file_id: 'z', file_name: 'archive.zip', mime_type: 'application/zip' },
     }));
 
-    expect(axios.get).not.toHaveBeenCalled();
-    expect(sentTexts()[0]).toMatch(/Voice messages are not supported/);
-    expect(sentTexts()[1]).toMatch(/application\/zip are not supported/);
+    expect(fs.readFileSync(path.join(workspace, 'TelegramDownloads', 'archive_2.zip'))).toEqual(bytes);
+    fs.rmSync(workspace, { recursive: true, force: true });
   });
 
   test('files over the download limit are refused before downloading', async () => {
@@ -521,6 +616,20 @@ describe('forwarding chat messages to Telegram', () => {
     expect(sends().some((s) => s.chat === '222')).toBe(true);
   });
 
+  test('an assistant HTML card is uploaded as a photo instead of base64 text', async () => {
+    const payload = Buffer.alloc(40, 7).toString('base64');
+    const content = `<div class="card"><h2>trigRatios.jpeg</h2><p class="desc">Rendered directly from assigned session storage</p><img src="data:image/jpeg;base64,${payload}"></div>`;
+    TelegramService.onMessageCreated(message({ role: 'assistant', agent_name: 'Accounting', content }));
+    await flush();
+
+    expect(sends()).toEqual([]);
+    const photos = axios.post.mock.calls.filter(([url]) => url.endsWith('/sendPhoto'));
+    expect(photos.map(([, body]) => body.get('chat_id'))).toEqual(['111', '222']);
+    expect(photos[0][1].get('caption')).toBe('Accounting: trigRatios.jpeg');
+    const uploaded = Buffer.from(await photos[0][1].get('photo').arrayBuffer());
+    expect(uploaded.equals(Buffer.alloc(40, 7))).toBe(true);
+  });
+
   test('retries once when Telegram asks to slow down (429)', async () => {
     let first = true;
     axios.post.mockImplementation(async (url) => {
@@ -536,6 +645,46 @@ describe('forwarding chat messages to Telegram', () => {
     await flush();
 
     expect(sends()).toHaveLength(2);
+  });
+});
+
+describe('sendFileToLinkedChats', () => {
+  const chatA = { chat_id: '111' };
+  const chatB = { chat_id: '222' };
+  const file = { buffer: Buffer.from('hello'), filename: 'note.txt', mimeType: 'text/plain', caption: 'note.txt' };
+
+  beforeEach(() => {
+    TelegramService.pollers.set(7, { token: TOKEN, stop: jest.fn() });
+    SessionTelegram.listChats.mockResolvedValue([chatA, chatB]);
+    SessionTelegram.removeChatByChatId.mockResolvedValue(true);
+  });
+
+  test('uploads the file to every linked chat', async () => {
+    const result = await TelegramService.sendFileToLinkedChats(7, file);
+    expect(result).toMatchObject({ success: true, chats_sent: 2, method: 'sendDocument', filename: 'note.txt' });
+    const docs = axios.post.mock.calls.filter(([url]) => url.endsWith('/sendDocument'));
+    expect(docs.map(([, body]) => body.get('chat_id'))).toEqual(['111', '222']);
+    expect(docs[0][1].get('caption')).toBe('note.txt');
+  });
+
+  test('refuses when the session has no bot or no linked chat', async () => {
+    await expect(TelegramService.sendFileToLinkedChats(99, file)).resolves.toMatchObject({ success: false });
+    SessionTelegram.listChats.mockResolvedValue([]);
+    await expect(TelegramService.sendFileToLinkedChats(7, file)).resolves.toMatchObject({ success: false });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('unlinks a chat that blocked the bot and still sends to the others', async () => {
+    axios.post.mockImplementation(async (url, body) => {
+      if (url.endsWith('/sendDocument') && body.get('chat_id') === '111') {
+        throw { message: 'forbidden', response: { status: 403, data: { description: 'Forbidden: bot was blocked by the user' } } };
+      }
+      return ok();
+    });
+
+    const result = await TelegramService.sendFileToLinkedChats(7, file);
+    expect(result.chats_sent).toBe(1);
+    expect(SessionTelegram.removeChatByChatId).toHaveBeenCalledWith(7, '111');
   });
 });
 
