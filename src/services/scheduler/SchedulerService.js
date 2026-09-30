@@ -156,6 +156,7 @@ class SchedulerService {
       await ChatService.processMessage(sessionId, userId, promptText, {
         stream: false,
         directAgentIds: targetAgents.map((a) => a.id),
+        metadataExtra: { channel: 'scheduled', scheduled_job_id: job.id },
       });
       await SessionScheduledJob.update(job.id, {
         last_run_at: nowIso,

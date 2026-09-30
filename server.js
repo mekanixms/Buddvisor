@@ -26,7 +26,10 @@ const { registerOpenMemoryTool } = require('./src/services/tools/openMemoryTool'
 const { registerConversationHistoryTool } = require('./src/services/tools/conversationHistoryTool');
 const { registerConversationRoundsTool } = require('./src/services/tools/conversationRoundsTool');
 const { registerSessionScheduleTool } = require('./src/services/tools/sessionScheduleTool');
+const { registerAgentDocumentsTool } = require('./src/services/tools/agentDocumentsTool');
+const { registerAgentToolsTool } = require('./src/services/tools/agentToolsTool');
 const { schedulerService } = require('./src/services/scheduler/SchedulerService');
+const TelegramService = require('./src/services/telegram/TelegramService');
 const { toolRegistry } = require('./src/services/tools/ToolRegistry');
 
 // Initialize Express app
@@ -115,6 +118,7 @@ const tasksRoutes = require('./src/routes/tasks.routes');
 const toolsRoutes = require('./src/routes/tools.routes');
 const conversationRoutes = require('./src/routes/conversation.routes');
 const artifactsRoutes = require('./src/routes/artifacts.routes');
+const telegramRoutes = require('./src/routes/telegram.routes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/sessions', sessionsRoutes);
@@ -125,6 +129,7 @@ app.use('/api/tasks', tasksRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/conversation', conversationRoutes);
 app.use('/api/artifacts', artifactsRoutes);
+app.use('/api/telegram', telegramRoutes);
 
 // Public app info for the user-menu About dialog
 app.get('/api/about', (req, res) => {
@@ -177,6 +182,8 @@ registerOpenMemoryTool();
 registerConversationHistoryTool();
 registerConversationRoundsTool();
 registerSessionScheduleTool();
+registerAgentDocumentsTool();
+registerAgentToolsTool();
 logger.info(`Registered ${toolRegistry.count} built-in tools`);
 
 // Run database migrations and start server
@@ -193,6 +200,9 @@ runMigrations().then(() => {
     // Start the session scheduled jobs runner (cron)
     schedulerService.start();
     logger.info('Scheduler service started');
+
+    // Start Telegram long-polling for sessions with a connected bot
+    TelegramService.startAll();
 
     console.log(`\n🚀 Buddvisor Server`);
     console.log(`📡 Server running on port ${PORT}`);
@@ -212,6 +222,13 @@ const gracefulShutdown = async (signal) => {
 
   // Stop scheduler service
   schedulerService.stop();
+
+  // Stop Telegram pollers
+  try {
+    TelegramService.stopAll();
+  } catch (error) {
+    logger.error('Error stopping Telegram pollers:', error);
+  }
   
   // Stop state persist cleanup interval
   try {

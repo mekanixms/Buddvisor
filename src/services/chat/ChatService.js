@@ -191,7 +191,7 @@ class ChatService {
    * Process a user message and generate response
    */
   static async processMessage(sessionId, userId, userMessage, options = {}) {
-    const { stream = false, onChunk = null, attachedDocumentsInfo = null, directAgentIds = null } = options;
+    const { stream = false, onChunk = null, attachedDocumentsInfo = null, directAgentIds = null, metadataExtra = null } = options;
 
     try {
       // Get full session (agents, documents, document_agent_assignment_map) for appending documents list to user message
@@ -208,6 +208,9 @@ class ChatService {
       const username = user ? user.username : null;
 
       const userMessageMetadata = { ...(username ? { username } : null) };
+      if (metadataExtra && typeof metadataExtra === 'object') {
+        Object.assign(userMessageMetadata, metadataExtra);
+      }
       if (attachedDocumentsInfo && typeof attachedDocumentsInfo === 'object' &&
           Array.isArray(attachedDocumentsInfo.documentNames) && attachedDocumentsInfo.documentNames.length > 0) {
         userMessageMetadata.attachedDocumentsInfo = {

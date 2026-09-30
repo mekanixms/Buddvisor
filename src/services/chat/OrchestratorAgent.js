@@ -18,6 +18,9 @@ const BaseLLMProvider = require('../../providers/BaseLLMProvider');
 const { expandPromptMacros } = require('../../utils/promptMacros');
 const { usageFromResponse, tokenRow, mergeTokenRows } = require('./tokenUsage');
 
+const DOCUMENT_ADMIN_TOOL = 'manage_agent_documents';
+const TOOL_ADMIN_TOOL = 'manage_agent_tools';
+
 /**
  * Generate a stable UUID-like conversation ID for prompt caching (e.g. xAI x-grok-conv-id).
  * @param {number} sessionId - Session ID
@@ -304,6 +307,13 @@ class OrchestratorAgent {
       ? `\n\n## Application Context\n\n${session.description}\n`
       : '';
 
+    const documentAdminRule = (session.orchestrator_tools || []).includes(DOCUMENT_ADMIN_TOOL)
+      ? `\n- Requests to assign documents to an agent, remove documents from an agent, or list agent documents (e.g. "assign report.* to @Agent") are handled by the orchestrator itself with its ${DOCUMENT_ADMIN_TOOL} tool: always use "direct" for them`
+      : '';
+    const toolAdminRule = (session.orchestrator_tools || []).includes(TOOL_ADMIN_TOOL)
+      ? `\n- Requests to give tools to an agent, remove tools from an agent, or list agent tools (e.g. "give @Agent the web_search tool") are handled by the orchestrator itself with its ${TOOL_ADMIN_TOOL} tool: always use "direct" for them`
+      : '';
+
     return {
       system: expandPromptMacros(`You are a routing orchestrator for a multi-agent advisor system. Your job is to analyze user requests and determine which specialist agent(s) should handle them.${initialContext}
 
@@ -326,7 +336,7 @@ Rules:
 - Use "direct" when the request is general and doesn't need specialist knowledge
 - Always include the agent IDs as numbers in an array
 - Be concise in your reasoning
-- Consider the application context when making routing decisions`, {
+- Consider the application context when making routing decisions${documentAdminRule}${toolAdminRule}`, {
         session,
         tools: session.orchestrator_tools || [],
       }),
@@ -767,7 +777,15 @@ Summary:`;
       ? `\n\n## Available Tools\n\nYou have access to the following tools. Use them when appropriate:\n${tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}`
       : '';
 
-    const systemPrompt = expandPromptMacros(`You are a helpful assistant for a small multi agent AI application. Provide clear, accurate, and practical advice.${initialContext}${agentSummary}
+    const documentAdminHint = orchestratorToolNames.includes(DOCUMENT_ADMIN_TOOL)
+      ? `\n\n## Document Assignment\n\nWhen the user asks to assign documents to an agent, remove documents from an agent, or list agent documents (e.g. "assign report.* to @Agent"), do it yourself with the ${DOCUMENT_ADMIN_TOOL} tool, then confirm exactly what changed.`
+      : '';
+
+    const toolAdminHint = orchestratorToolNames.includes(TOOL_ADMIN_TOOL)
+      ? `\n\n## Tool Assignment\n\nWhen the user asks to give tools to an agent, remove tools from an agent, or list agent tools (e.g. "give @Agent the web_search tool"), do it yourself with the ${TOOL_ADMIN_TOOL} tool, then confirm exactly what changed.`
+      : '';
+
+    const systemPrompt = expandPromptMacros(`You are a helpful assistant for a small multi agent AI application. Provide clear, accurate, and practical advice.${initialContext}${agentSummary}${documentAdminHint}${toolAdminHint}
 
 Agent Details (JSON):
 ${agentJsonList}
@@ -1036,6 +1054,14 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
       ? `\n\n## Your Own Tools\n\nBesides delegation, you have direct access to the following tools. Use them when appropriate:\n${orchestratorTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}`
       : '';
 
+    const documentAdminRule = orchestratorToolNames.includes(DOCUMENT_ADMIN_TOOL)
+      ? `\n- When the user asks to assign documents to an agent, remove documents from an agent, or list agent documents (e.g. "assign report.* to @Agent"), do it yourself with the ${DOCUMENT_ADMIN_TOOL} tool: do not delegate it. Then confirm to the user exactly what changed.`
+      : '';
+
+    const toolAdminRule = orchestratorToolNames.includes(TOOL_ADMIN_TOOL)
+      ? `\n- When the user asks to give tools to an agent, remove tools from an agent, or list agent tools (e.g. "give @Agent the web_search tool"), do it yourself with the ${TOOL_ADMIN_TOOL} tool: do not delegate it. Then confirm to the user exactly what changed.`
+      : '';
+
     const systemPrompt = expandPromptMacros(`You are the lead agent (orchestrator) of a multi-agent advisory team. You are the only team member who sees the full conversation history, and you are responsible for the final answer to the user.${initialContext}
 
 ## Your Team
@@ -1055,7 +1081,7 @@ ${agentJsonList}
 - You may delegate to multiple agents and you may send follow-up delegations based on earlier results, up to ${maxDelegations} delegations per user turn.
 - When tasks are independent, issue multiple delegate_to_agent calls in the SAME response: they will run in parallel, which is faster. Use sequential follow-up delegations only when one result depends on another.
 - Past assistant messages in the conversation history may include "[Specialist results behind this answer]" blocks with what each agent previously reported. Reuse those results instead of re-delegating identical tasks.
-- After gathering the results you need, write the final answer to the user yourself, synthesizing and reconciling the agents' contributions. Do not just paste raw agent output: integrate it.${toolSummary}${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`, {
+- After gathering the results you need, write the final answer to the user yourself, synthesizing and reconciling the agents' contributions. Do not just paste raw agent output: integrate it.${documentAdminRule}${toolAdminRule}${toolSummary}${documentContext ? `\n\n## Document Context\n\nUse the following document context to help answer questions:\n${documentContext}` : ''}`, {
       session,
       provider: providerType,
       model,

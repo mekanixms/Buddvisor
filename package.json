@@ -49,6 +49,7 @@
     "ollama": "^0.6.3",
     "openai": "^4.20.0",
     "pdf-parse": "^1.1.1",
+    "qrcode": "^1.5.4",
     "sqlite3": "^5.1.6",
     "tesseract.js": "^5.0.0",
     "winston": "^3.11.0",

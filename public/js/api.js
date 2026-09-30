@@ -722,6 +722,24 @@ class APIClient {
       this.get('/tools/stats/executions'),
   };
 
+  // Telegram API (owner-only, per session)
+  telegram = {
+    get: (sessionId) =>
+      this.get(`/telegram/${sessionId}`),
+
+    connect: (sessionId, token) =>
+      this.put(`/telegram/${sessionId}`, { token }),
+
+    disconnect: (sessionId) =>
+      this.delete(`/telegram/${sessionId}`),
+
+    createPairing: (sessionId) =>
+      this.post(`/telegram/${sessionId}/pairing`, {}),
+
+    revokeChat: (sessionId, chatId) =>
+      this.delete(`/telegram/${sessionId}/chats/${chatId}`),
+  };
+
   // Artifacts API
   artifacts = {
     create: (content) =>

@@ -345,6 +345,41 @@ class WorkSession {
   }
 
   /**
+   * Assign one document to one agent in a session (idempotent).
+   * @returns {Promise<boolean>} true when a new assignment row was created
+   */
+  static async addDocumentAgentAssignment(sessionId, agentId, documentId) {
+    try {
+      const result = await dbRun(
+        `INSERT OR IGNORE INTO session_agent_documents (session_id, agent_id, document_id)
+         VALUES (?, ?, ?)`,
+        [sessionId, agentId, documentId]
+      );
+      return (result?.changes || 0) > 0;
+    } catch (error) {
+      logger.error('Error adding document agent assignment:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Remove one document from one agent in a session.
+   * @returns {Promise<boolean>} true when an assignment row was deleted
+   */
+  static async removeDocumentAgentAssignment(sessionId, agentId, documentId) {
+    try {
+      const result = await dbRun(
+        'DELETE FROM session_agent_documents WHERE session_id = ? AND agent_id = ? AND document_id = ?',
+        [sessionId, agentId, documentId]
+      );
+      return (result?.changes || 0) > 0;
+    } catch (error) {
+      logger.error('Error removing document agent assignment:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Remove all document assignments for an agent in a session
    */
   static async removeDocumentAssignmentsForAgent(sessionId, agentId) {
@@ -399,6 +434,94 @@ class WorkSession {
       }
     } catch (error) {
       logger.error('Error replacing tool agent assignments:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all per-agent tool assignments of a session with parsed configs.
+   * @param {number} sessionId
+   * @returns {Promise<Array<{agent_id:number, tool_name:string, tool_config:object|null}>>}
+   */
+  static async getToolAgentAssignments(sessionId) {
+    try {
+      const rows = await dbAll(
+        `SELECT agent_id, tool_name, tool_config FROM session_agent_tools
+         WHERE session_id = ?
+         ORDER BY agent_id, tool_name`,
+        [sessionId]
+      );
+      return (rows || []).map((row) => {
+        let toolConfig = null;
+        if (row.tool_config) {
+          try {
+            toolConfig = JSON.parse(row.tool_config);
+          } catch (e) {
+            logger.warn(`Failed to parse tool_config for tool ${row.tool_name}:`, e);
+          }
+        }
+        return { agent_id: row.agent_id, tool_name: row.tool_name, tool_config: toolConfig };
+      });
+    } catch (error) {
+      logger.error('Error getting tool agent assignments:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Assign one tool to one agent in a session (idempotent). When a config is given it
+   * replaces the stored one.
+   * @returns {Promise<'created'|'updated'|'unchanged'>}
+   */
+  static async addToolAgentAssignment(sessionId, agentId, toolName, toolConfig = null) {
+    try {
+      const configJson = toolConfig
+        ? (typeof toolConfig === 'string' ? toolConfig : JSON.stringify(toolConfig))
+        : null;
+
+      const existing = await dbGet(
+        `SELECT tool_config FROM session_agent_tools
+         WHERE session_id = ? AND agent_id = ? AND tool_name = ?`,
+        [sessionId, agentId, toolName]
+      );
+
+      if (!existing) {
+        await dbRun(
+          `INSERT INTO session_agent_tools (session_id, agent_id, tool_name, tool_config)
+           VALUES (?, ?, ?, ?)`,
+          [sessionId, agentId, toolName, configJson]
+        );
+        return 'created';
+      }
+
+      if (configJson !== null && configJson !== existing.tool_config) {
+        await dbRun(
+          `UPDATE session_agent_tools SET tool_config = ?
+           WHERE session_id = ? AND agent_id = ? AND tool_name = ?`,
+          [configJson, sessionId, agentId, toolName]
+        );
+        return 'updated';
+      }
+      return 'unchanged';
+    } catch (error) {
+      logger.error('Error adding tool agent assignment:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Remove one tool from one agent in a session.
+   * @returns {Promise<boolean>} true when an assignment row was deleted
+   */
+  static async removeToolAgentAssignment(sessionId, agentId, toolName) {
+    try {
+      const result = await dbRun(
+        'DELETE FROM session_agent_tools WHERE session_id = ? AND agent_id = ? AND tool_name = ?',
+        [sessionId, agentId, toolName]
+      );
+      return (result?.changes || 0) > 0;
+    } catch (error) {
+      logger.error('Error removing tool agent assignment:', error);
       throw error;
     }
   }

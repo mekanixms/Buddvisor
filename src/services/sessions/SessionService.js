@@ -12,7 +12,13 @@ const {
   mergeWithStored,
 } = require('../../utils/modelCapabilities');
 
+// Orchestrator tools that are pre-assigned to new sessions. They remain ordinary
+// assignments, so the user can untick them in Configure Session → Tools.
+const DEFAULT_ORCHESTRATOR_TOOLS = ['manage_agent_documents', 'manage_agent_tools'];
+
 class SessionService {
+  static DEFAULT_ORCHESTRATOR_TOOLS = DEFAULT_ORCHESTRATOR_TOOLS;
+
   /**
    * Create a new work session
    * @param {number} userId - User ID
@@ -52,6 +58,14 @@ class SessionService {
         orchestrator_provider_type,
         orchestrator_provider_config: encryptedConfig,
       });
+
+      const defaultTools = DEFAULT_ORCHESTRATOR_TOOLS.filter((toolName) => toolRegistry.has(toolName));
+      if (defaultTools.length > 0) {
+        await WorkSession.replaceOrchestratorToolAssignments(
+          session.id,
+          defaultTools.map((toolName) => ({ tool_name: toolName }))
+        );
+      }
 
       logger.info(`Session created: ${name} (User: ${userId})`);
 
@@ -515,6 +529,12 @@ class SessionService {
     try {
       // Check permission
       await this.getSession(sessionId, userId);
+
+      // Stop any Telegram poller and drop its rows explicitly (does not rely on FK cascade)
+      const TelegramService = require('../telegram/TelegramService');
+      const SessionTelegram = require('../../models/SessionTelegram');
+      TelegramService.stop(sessionId);
+      await SessionTelegram.deleteConfig(sessionId);
 
       // Delete session (cascade deletes messages, session_agents, session_documents)
       await WorkSession.delete(sessionId);
@@ -1048,6 +1068,7 @@ class SessionService {
             content: msg.content,
             tokens_used: 0,
             created_at: msg.created_at || new Date().toISOString(),
+            emit: false,
           });
         }
         logger.info(`Imported ${importData.messages.length} messages`);

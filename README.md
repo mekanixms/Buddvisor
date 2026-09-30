@@ -407,7 +407,7 @@ You can restrict which tools appear in the **Tools view** (`nav-tools`) and **Co
 ```env
 # Comma-separated list of tool names. Only these tools are shown in the UI.
 # If empty or not set, all registered tools are shown.
-ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,terminal,state_persist,datetime,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule
+ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,terminal,state_persist,datetime,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule,manage_agent_documents,manage_agent_tools
 ```
 
 - **Empty or unset:** All registered tools are shown (default behavior).

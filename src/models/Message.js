@@ -1,5 +1,6 @@
 const { dbRun, dbGet, dbAll } = require('../../config/database');
 const logger = require('../utils/logger');
+const messageEvents = require('../utils/messageEvents');
 
 /** Conversation order. created_at stays the clock; sort_index places inserts (e.g. summaries). */
 const ORDER_ASC = 'COALESCE(sort_index, id) ASC, id ASC';
@@ -23,6 +24,7 @@ class Message {
         agent_name = null,
         metadata = null,
         sort_index = null,
+        emit = true,
       } = messageData;
 
       const sortIndex = sort_index == null
@@ -37,7 +39,18 @@ class Message {
 
       logger.info(`Message created in session ${session_id} (ID: ${result.lastID})`);
 
-      return await this.findById(result.lastID);
+      const created = await this.findById(result.lastID);
+
+      // Bulk inserts (e.g. session import) pass emit: false so followers are not flooded
+      if (emit && created) {
+        try {
+          messageEvents.emit('created', created);
+        } catch (listenerError) {
+          logger.error('Message listener failed:', listenerError);
+        }
+      }
+
+      return created;
     } catch (error) {
       logger.error('Error creating message:', error);
       throw error;

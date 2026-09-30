@@ -177,6 +177,12 @@ class SessionConfig {
                   </button>
                 </li>
                 <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="telegram-tab" data-bs-toggle="tab"
+                          data-bs-target="#telegram-panel" type="button" role="tab">
+                    <i class="bi bi-telegram me-1"></i>Telegram
+                  </button>
+                </li>
+                <li class="nav-item" role="presentation">
                   <button class="nav-link" id="orchestrator-tab" data-bs-toggle="tab"
                           data-bs-target="#orchestrator-panel" type="button" role="tab">
                     <i class="bi bi-diagram-3 me-1"></i>Orchestrator
@@ -682,6 +688,16 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                   </div>
                 </div>
 
+                <!-- Telegram Tab -->
+                <div class="tab-pane fade" id="telegram-panel" role="tabpanel">
+                  <div id="telegram-content">
+                    <div class="text-muted text-center py-4">
+                      <i class="bi bi-telegram fs-2"></i>
+                      <p class="mb-0 mt-2">Open this tab to load the Telegram connection.</p>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- Orchestrator Tab -->
                 <div class="tab-pane fade" id="orchestrator-panel" role="tabpanel">
                   <form id="orchestrator-form">
@@ -848,6 +864,18 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         if (e.target.getAttribute('data-bs-target') === '#scheduled-jobs-panel') {
           window.sessionConfig.loadScheduledJobs(window.sessionConfig.currentSession?.id ?? null, 'scheduled-jobs-content');
         }
+        if (e.target.getAttribute('data-bs-target') === '#telegram-panel') {
+          window.sessionConfig.loadTelegram();
+        } else {
+          window.sessionConfig.stopTelegramWatch();
+        }
+      });
+    }
+
+    const configModalEl = document.getElementById('sessionConfigModal');
+    if (configModalEl) {
+      configModalEl.addEventListener('hidden.bs.modal', () => {
+        window.sessionConfig.stopTelegramWatch();
       });
     }
 
@@ -1084,6 +1112,286 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       html += '</tbody></table></div></div>';
     }
     container.innerHTML = html;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Telegram tab (changes apply immediately, they are not part of "Save")
+  // ---------------------------------------------------------------------------
+
+  telegramEscape(text) {
+    const fn = (typeof window !== 'undefined' && window.escapeHtml) ? window.escapeHtml : null;
+    if (fn) return fn(text);
+    return text == null ? '' : String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  stopTelegramWatch() {
+    if (this.telegramWatchTimer) {
+      clearInterval(this.telegramWatchTimer);
+      this.telegramWatchTimer = null;
+    }
+    if (this.telegramCountdownTimer) {
+      clearInterval(this.telegramCountdownTimer);
+      this.telegramCountdownTimer = null;
+    }
+  }
+
+  async loadTelegram() {
+    const container = document.getElementById('telegram-content');
+    const sessionId = this.currentSession?.id;
+    if (!container || !sessionId) return;
+
+    this.stopTelegramWatch();
+    this.telegramPairing = null;
+    container.innerHTML = '<div class="text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+    try {
+      const response = await api.telegram.get(sessionId);
+      this.telegramStatus = response?.data || { configured: false, chats: [] };
+      this.renderTelegramPanel();
+    } catch (error) {
+      console.error('Error loading Telegram status:', error);
+      container.innerHTML = `<div class="alert alert-danger mb-0">${this.telegramEscape(error.message || 'Failed to load Telegram settings')}</div>`;
+    }
+  }
+
+  renderTelegramPanel() {
+    const container = document.getElementById('telegram-content');
+    if (!container) return;
+    const esc = (t) => this.telegramEscape(t);
+    const status = this.telegramStatus || { configured: false, chats: [] };
+
+    if (!status.configured) {
+      container.innerHTML = `
+        <div class="mb-3">
+          <label class="form-label" for="telegram-token-input">Bot token</label>
+          <div class="input-group">
+            <input type="password" class="form-control font-monospace" id="telegram-token-input"
+                   placeholder="123456789:AAExampleTokenFromBotFather" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn btn-primary" data-action="telegram-connect">
+              <i class="bi bi-plug me-1"></i>Connect
+            </button>
+          </div>
+          <div class="form-text">
+            Create a bot with <strong>@BotFather</strong> in Telegram (<code>/newbot</code>) and paste its token here.
+            Each bot can serve only one session. The token is stored encrypted and is never shown again.
+            These changes apply immediately, you do not need to press Save.
+          </div>
+        </div>`;
+      return;
+    }
+
+    const chats = Array.isArray(status.chats) ? status.chats : [];
+    const errorHtml = status.last_error
+      ? `<div class="alert alert-warning py-2"><i class="bi bi-exclamation-triangle me-1"></i>${esc(status.last_error)}</div>`
+      : '';
+    const stateBadge = status.enabled && status.running
+      ? '<span class="badge bg-success">Listening</span>'
+      : '<span class="badge bg-secondary">Not running</span>';
+
+    const chatRows = chats.length === 0
+      ? '<div class="text-muted small">No chats linked yet.</div>'
+      : `<div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead class="table-light"><tr><th>Chat</th><th>Linked</th><th>Last message</th><th></th></tr></thead>
+          <tbody>
+            ${chats.map((c) => {
+              const label = c.username ? `@${c.username}` : (c.display_name || c.chat_id);
+              const linked = c.created_at ? new Date(c.created_at.replace(' ', 'T') + (c.created_at.includes('Z') ? '' : 'Z')).toLocaleString() : '—';
+              const last = c.last_message_at ? new Date(c.last_message_at).toLocaleString() : '—';
+              return `<tr>
+                <td>${esc(label)}${c.display_name && c.username ? ` <span class="text-muted small">${esc(c.display_name)}</span>` : ''}</td>
+                <td class="small">${esc(linked)}</td>
+                <td class="small">${esc(last)}</td>
+                <td class="text-end">
+                  <button type="button" class="btn btn-outline-danger btn-sm" data-action="telegram-revoke-chat" data-chat-id="${c.id}">
+                    <i class="bi bi-x-lg me-1"></i>Revoke
+                  </button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody></table></div>`;
+
+    container.innerHTML = `
+      ${errorHtml}
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <div>
+          <i class="bi bi-telegram me-1"></i><strong>@${esc(status.bot_username || 'bot')}</strong>
+          <span class="ms-2">${stateBadge}</span>
+          <div class="text-muted small font-monospace">${esc(status.token_masked || '')}</div>
+        </div>
+        <button type="button" class="btn btn-outline-danger btn-sm" data-action="telegram-disconnect">
+          <i class="bi bi-plug me-1"></i>Disconnect bot
+        </button>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <h6 class="card-title">Link a Telegram chat</h6>
+          <p class="text-muted small mb-2">
+            Each link works once and expires after a few minutes. Generate a new one for every person or device you want to add.
+          </p>
+          <div id="telegram-pairing-area">
+            <button type="button" class="btn btn-primary btn-sm" data-action="telegram-generate-link"
+                    ${status.enabled ? '' : 'disabled'}>
+              <i class="bi bi-qr-code me-1"></i>Generate link
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <h6>Linked chats <span class="badge bg-primary">${chats.length}</span></h6>
+      <div id="telegram-chats-area">${chatRows}</div>`;
+  }
+
+  renderTelegramPairing() {
+    const area = document.getElementById('telegram-pairing-area');
+    const pairing = this.telegramPairing;
+    if (!area || !pairing) return;
+    const esc = (t) => this.telegramEscape(t);
+    const safeQr = typeof pairing.qr === 'string' && pairing.qr.startsWith('data:image/png;base64,') ? pairing.qr : '';
+
+    area.innerHTML = `
+      <div class="row g-3 align-items-center">
+        <div class="col-auto">
+          ${safeQr ? `<img src="${safeQr}" alt="Telegram QR code" width="200" height="200" class="border rounded bg-white">` : ''}
+        </div>
+        <div class="col">
+          <p class="mb-2"><strong>Phone:</strong> point the camera at the QR code, open the link, and tap <em>Start</em> in Telegram.</p>
+          <p class="mb-2"><strong>Desktop:</strong> use one of these, then press <em>Start</em>.</p>
+          <div class="d-flex flex-wrap gap-2 mb-2">
+            <a class="btn btn-primary btn-sm" href="${esc(pairing.deepLink)}">
+              <i class="bi bi-telegram me-1"></i>Open in Telegram app
+            </a>
+            <a class="btn btn-outline-primary btn-sm" href="${esc(pairing.link)}" target="_blank" rel="noopener noreferrer">
+              <i class="bi bi-box-arrow-up-right me-1"></i>Open in browser
+            </a>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-action="telegram-copy-link">
+              <i class="bi bi-clipboard me-1"></i>Copy link
+            </button>
+          </div>
+          <div class="small text-muted">
+            Expires in <span id="telegram-pairing-countdown" class="fw-semibold"></span>.
+            Waiting for the chat to connect…
+          </div>
+        </div>
+      </div>`;
+  }
+
+  updateTelegramCountdown() {
+    const el = document.getElementById('telegram-pairing-countdown');
+    const pairing = this.telegramPairing;
+    if (!pairing) return;
+    const remaining = Math.max(0, Math.floor((new Date(pairing.expiresAt).getTime() - Date.now()) / 1000));
+    if (remaining <= 0) {
+      this.stopTelegramWatch();
+      this.telegramPairing = null;
+      const area = document.getElementById('telegram-pairing-area');
+      if (area) {
+        area.innerHTML = `
+          <div class="text-muted small mb-2">The link expired.</div>
+          <button type="button" class="btn btn-primary btn-sm" data-action="telegram-generate-link">
+            <i class="bi bi-qr-code me-1"></i>Generate link
+          </button>`;
+      }
+      return;
+    }
+    if (el) {
+      const m = Math.floor(remaining / 60);
+      const s = String(remaining % 60).padStart(2, '0');
+      el.textContent = `${m}:${s}`;
+    }
+  }
+
+  async connectTelegram() {
+    const sessionId = this.currentSession?.id;
+    const input = document.getElementById('telegram-token-input');
+    const token = input ? input.value.trim() : '';
+    if (!token) {
+      showToast('Paste the bot token from BotFather first', 'warning');
+      return;
+    }
+    try {
+      const response = await api.telegram.connect(sessionId, token);
+      this.telegramStatus = response?.data || { configured: false, chats: [] };
+      if (input) input.value = '';
+      this.renderTelegramPanel();
+      showToast('Telegram bot connected', 'success');
+    } catch (error) {
+      showToast(error.message || 'Failed to connect the bot', 'danger');
+    }
+  }
+
+  async disconnectTelegram() {
+    const sessionId = this.currentSession?.id;
+    if (!confirm('Disconnect this bot? All linked chats will be removed.')) return;
+    try {
+      await api.telegram.disconnect(sessionId);
+      this.stopTelegramWatch();
+      this.telegramPairing = null;
+      this.telegramStatus = { configured: false, chats: [] };
+      this.renderTelegramPanel();
+      showToast('Telegram bot disconnected', 'success');
+    } catch (error) {
+      showToast(error.message || 'Failed to disconnect', 'danger');
+    }
+  }
+
+  async generateTelegramPairing() {
+    const sessionId = this.currentSession?.id;
+    try {
+      const response = await api.telegram.createPairing(sessionId);
+      this.telegramPairing = response?.data || null;
+      if (!this.telegramPairing) return;
+      this.renderTelegramPairing();
+      this.updateTelegramCountdown();
+      this.startTelegramWatch();
+    } catch (error) {
+      showToast(error.message || 'Failed to create the link', 'danger');
+    }
+  }
+
+  startTelegramWatch() {
+    this.stopTelegramWatch();
+    const sessionId = this.currentSession?.id;
+    const baseline = (this.telegramStatus?.chats || []).length;
+
+    this.telegramCountdownTimer = setInterval(() => this.updateTelegramCountdown(), 1000);
+    this.telegramWatchTimer = setInterval(async () => {
+      try {
+        const response = await api.telegram.get(sessionId);
+        const status = response?.data;
+        if (status && Array.isArray(status.chats) && status.chats.length > baseline) {
+          this.stopTelegramWatch();
+          this.telegramPairing = null;
+          this.telegramStatus = status;
+          this.renderTelegramPanel();
+          showToast('Telegram chat linked', 'success');
+        }
+      } catch (error) {
+        // Keep waiting; a transient failure must not close the QR
+      }
+    }, 3000);
+  }
+
+  async copyTelegramLink() {
+    const link = this.telegramPairing?.link;
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Link copied', 'success');
+    } catch (error) {
+      window.prompt('Copy this link', link);
+    }
+  }
+
+  async revokeTelegramChat(chatId) {
+    const sessionId = this.currentSession?.id;
+    if (!chatId || !confirm('Unlink this Telegram chat?')) return;
+    try {
+      await api.telegram.revokeChat(sessionId, chatId);
+      await this.loadTelegram();
+      showToast('Chat unlinked', 'success');
+    } catch (error) {
+      showToast(error.message || 'Failed to unlink the chat', 'danger');
+    }
   }
 
   /**
@@ -2375,6 +2683,21 @@ document.addEventListener('click', (e) => {
       break;
     case 'test-ollama-connection':
       sessionConfig.testOllamaConnection();
+      break;
+    case 'telegram-connect':
+      sessionConfig.connectTelegram();
+      break;
+    case 'telegram-disconnect':
+      sessionConfig.disconnectTelegram();
+      break;
+    case 'telegram-generate-link':
+      sessionConfig.generateTelegramPairing();
+      break;
+    case 'telegram-copy-link':
+      sessionConfig.copyTelegramLink();
+      break;
+    case 'telegram-revoke-chat':
+      sessionConfig.revokeTelegramChat(target.dataset.chatId ? parseInt(target.dataset.chatId, 10) : null);
       break;
   }
 });
