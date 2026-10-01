@@ -9,6 +9,7 @@
 
 const axios = require('axios');
 const crypto = require('crypto');
+const FormData = require('form-data');
 const QRCode = require('qrcode');
 
 const WorkSession = require('../../models/WorkSession');
@@ -234,15 +235,19 @@ class TelegramService {
   static async sendFile(token, chatId, file) {
     const attempt = async () => {
       const { method, field } = telegramUploadMethod(file.mimeType, file.buffer.length);
+      // The form-data package, not the global FormData. On Node 18, append(blob, filename)
+      // builds an experimental buffer.File and prints a warning. This package writes the
+      // multipart body from the Buffer directly.
       const form = new FormData();
       form.append('chat_id', String(chatId));
       const caption = file.caption ? String(file.caption).slice(0, 1024) : '';
       if (caption) form.append('caption', caption);
       const filename = file.filename || 'file';
       const mimeType = normalizeMime(file.mimeType) || 'application/octet-stream';
-      form.append(field, new Blob([file.buffer], { type: mimeType }), filename);
+      form.append(field, file.buffer, { filename, contentType: mimeType });
       try {
         const res = await axios.post(`${API_BASE()}/bot${token}/${method}`, form, {
+          headers: form.getHeaders(),
           timeout: 120000,
           maxBodyLength: Infinity,
           maxContentLength: Infinity,

@@ -51,7 +51,7 @@ async function fileFromWorkspace(workspace, raw) {
   const normalized = raw.replace(/^\.\//, '');
   const relatives = [normalized];
   if (!normalized.includes('/') && !normalized.includes('\\')) {
-    relatives.push(`assigned_documents/${normalized}`, `TelegramDownloads/${normalized}`);
+    relatives.push(`assigned_documents/${normalized}`, `TelegramDownloads/${normalized}`, `Uploads/${normalized}`);
   }
 
   let traversal = null;
@@ -192,7 +192,7 @@ async function resolveAndSend(sessionId, agentId, raw, caption) {
 function registerTelegramSendTool() {
   toolRegistry.register({
     name: TOOL_NAME,
-    description: 'Send a file to every Telegram chat linked to this session. Use this whenever the user asks to upload, send, or attach a file, image, audio, or video to Telegram. Pass a workspace-relative path (for example assigned_documents/report.pdf or TelegramDownloads/audio_20260101_120000.ogg) or a session document filename. This delivers the actual file. Do not embed the file in your reply as HTML, a base64 data-URI image, or a card that only says the file is attached.',
+    description: 'Send a file to every Telegram chat linked to this session. Use this whenever the user asks to upload, send, or attach a file, image, audio, or video to Telegram. Pass a workspace-relative path (for example assigned_documents/report.pdf, TelegramDownloads/audio_20260101_120000.ogg, or Uploads/archive.zip) or a session document filename. This delivers the actual file. Do not embed the file in your reply as HTML, a base64 data-URI image, or a card that only says the file is attached.',
     category: 'session',
     parameters: {
       file: {

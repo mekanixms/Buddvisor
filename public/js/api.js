@@ -342,6 +342,28 @@ class APIClient {
 
   // Chat API
   chat = {
+    uploadFile: async (sessionId, file, generateEmbeddings = true) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('generateEmbeddings', generateEmbeddings ? 'true' : 'false');
+      const token = this.getToken();
+      const response = await fetch(`${this.baseURL}/chat/${sessionId}/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+        body: formData,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.success === false) {
+        const message = typeof body.error === 'string'
+          ? body.error
+          : (body.error && body.error.message) || 'Upload failed';
+        throw new Error(message);
+      }
+      return body;
+    },
+
     sendMessage: (sessionId, message, attachedDocumentsInfo = null) =>
       this.post(`/chat/${sessionId}`, {
         message,

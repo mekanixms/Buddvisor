@@ -95,6 +95,11 @@ const sentTexts = () => axios.post.mock.calls
   .filter(([url]) => url.endsWith('/sendMessage'))
   .map(([, body]) => body.text);
 
+const formField = (body, name) => {
+  const match = body.getBuffer().toString('utf8').match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r\\n]*)`));
+  return match ? match[1] : null;
+};
+
 const ctx = { sessionId: 7, token: TOKEN };
 const privateMessage = (text, extra = {}) => ({
   chat: { id: 555, type: 'private', first_name: 'Ana' },
@@ -624,10 +629,9 @@ describe('forwarding chat messages to Telegram', () => {
 
     expect(sends()).toEqual([]);
     const photos = axios.post.mock.calls.filter(([url]) => url.endsWith('/sendPhoto'));
-    expect(photos.map(([, body]) => body.get('chat_id'))).toEqual(['111', '222']);
-    expect(photos[0][1].get('caption')).toBe('Accounting: trigRatios.jpeg');
-    const uploaded = Buffer.from(await photos[0][1].get('photo').arrayBuffer());
-    expect(uploaded.equals(Buffer.alloc(40, 7))).toBe(true);
+    expect(photos.map(([, body]) => formField(body, 'chat_id'))).toEqual(['111', '222']);
+    expect(formField(photos[0][1], 'caption')).toBe('Accounting: trigRatios.jpeg');
+    expect(photos[0][1].getBuffer().includes(Buffer.alloc(40, 7))).toBe(true);
   });
 
   test('retries once when Telegram asks to slow down (429)', async () => {
@@ -663,8 +667,8 @@ describe('sendFileToLinkedChats', () => {
     const result = await TelegramService.sendFileToLinkedChats(7, file);
     expect(result).toMatchObject({ success: true, chats_sent: 2, method: 'sendDocument', filename: 'note.txt' });
     const docs = axios.post.mock.calls.filter(([url]) => url.endsWith('/sendDocument'));
-    expect(docs.map(([, body]) => body.get('chat_id'))).toEqual(['111', '222']);
-    expect(docs[0][1].get('caption')).toBe('note.txt');
+    expect(docs.map(([, body]) => formField(body, 'chat_id'))).toEqual(['111', '222']);
+    expect(formField(docs[0][1], 'caption')).toBe('note.txt');
   });
 
   test('refuses when the session has no bot or no linked chat', async () => {
@@ -676,7 +680,7 @@ describe('sendFileToLinkedChats', () => {
 
   test('unlinks a chat that blocked the bot and still sends to the others', async () => {
     axios.post.mockImplementation(async (url, body) => {
-      if (url.endsWith('/sendDocument') && body.get('chat_id') === '111') {
+      if (url.endsWith('/sendDocument') && formField(body, 'chat_id') === '111') {
         throw { message: 'forbidden', response: { status: 403, data: { description: 'Forbidden: bot was blocked by the user' } } };
       }
       return ok();

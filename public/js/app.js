@@ -778,7 +778,15 @@ document.addEventListener('click', (e) => {
       }
       if (window.documentManager && window.chatInterface) {
         documentManager.showUploadModal({
-          onUploadComplete: (doc) => chatInterface.addPendingDocument(doc),
+          allowAnyType: true,
+          sessionId: window.sessionManager.currentSession.id,
+          onUploadComplete: (result) => {
+            if (result?.kind === 'workspace') {
+              chatInterface.showWorkspaceUpload(result.chatMessage);
+            } else {
+              chatInterface.addPendingDocument(result);
+            }
+          },
         });
       }
       break;

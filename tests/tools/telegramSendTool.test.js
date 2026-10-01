@@ -85,6 +85,18 @@ describe('send_to_telegram', () => {
     expect(sent.buffer.equals(Buffer.from('ogg'))).toBe(true);
   });
 
+  it('sends a bare filename from the orchestrator Uploads folder', async () => {
+    const dir = path.join(workspace, 'Uploads');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'archive.zip'), Buffer.from('zip'));
+
+    const result = await handler({ file: 'archive.zip' }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.filename).toBe('archive.zip');
+    expect(Document.getBySession).not.toHaveBeenCalled();
+  });
+
   it('sends a session document when the working folder does not have the file', async () => {
     const stored = path.join(workspace, 'stored.jpeg');
     fs.writeFileSync(stored, Buffer.from('jpeg'));

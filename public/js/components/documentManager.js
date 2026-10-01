@@ -253,30 +253,38 @@ class DocumentManager {
 
   /**
    * Show upload modal
-   * @param {object} options - Optional: { onUploadComplete: (document) => void }
+   * @param {object} options - Optional: { onUploadComplete, allowAnyType, sessionId }
    */
   showUploadModal(options = {}) {
     this._uploadModalOnComplete = options.onUploadComplete || null;
+    this._uploadAllowAny = !!options.allowAnyType;
+    this._uploadSessionId = options.sessionId || null;
     const acceptTypes = this.supportedTypes
       .map(t => t.extension)
       .join(',');
+    const acceptAttr = this._uploadAllowAny ? '' : `accept="${acceptTypes}"`;
+    const helpText = this._uploadAllowAny
+      ? `Any file. PDF, Word, Excel, text, and media are added as session documents. Other types are saved in the orchestrator working folder under Uploads and assigned to the orchestrator.
+                  <br>Max size: ${this.formatFileSize(this.maxFileSize)}`
+      : `Supported: PDF, Word, Excel, CSV, TXT, HTML, MD, JSON, Images
+                  <br>Max size: ${this.formatFileSize(this.maxFileSize)}`;
+    const title = this._uploadAllowAny ? 'Upload file' : 'Upload Document';
 
     const modalHtml = `
       <div class="modal fade" id="uploadModal" tabindex="-1">
         <div class="modal-dialog">
           <div class="modal-content">
             <div class="modal-header">
-              <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Document</h5>
+              <h5 class="modal-title"><i class="bi bi-upload me-2"></i>${title}</h5>
               <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
               <div class="mb-3">
                 <label class="form-label">Select File</label>
                 <input type="file" class="form-control" id="upload-file"
-                       accept="${acceptTypes}">
+                       ${acceptAttr}>
                 <div class="form-text">
-                  Supported: PDF, Word, Excel, CSV, TXT, HTML, MD, JSON, Images
-                  <br>Max size: ${this.formatFileSize(this.maxFileSize)}
+                  ${helpText}
                 </div>
               </div>
 
@@ -342,6 +350,8 @@ class DocumentManager {
     const modal = new bootstrap.Modal(modalEl);
     modalEl.addEventListener('hidden.bs.modal', () => {
       this._uploadModalOnComplete = null;
+      this._uploadAllowAny = false;
+      this._uploadSessionId = null;
     }, { once: true });
 
     modal.show();
@@ -395,15 +405,21 @@ class DocumentManager {
     uploadBtn.disabled = true;
 
     try {
-      const response = await api.documents.upload(file, generateEmbeddings);
+      const response = (this._uploadAllowAny && this._uploadSessionId)
+        ? await api.chat.uploadFile(this._uploadSessionId, file, generateEmbeddings)
+        : await api.documents.upload(file, generateEmbeddings);
 
       if (response.success) {
         showToast(response.message || 'Document uploaded successfully', 'success');
 
-        // Callback for chat upload flow (e.g. add to pending documents)
+        // Callback for chat upload flow (document pending list, or workspace file already saved)
         if (typeof this._uploadModalOnComplete === 'function') {
-          const doc = response.data?.document;
-          if (doc) this._uploadModalOnComplete(doc);
+          if (response.data?.kind === 'workspace') {
+            this._uploadModalOnComplete(response.data);
+          } else {
+            const doc = response.data?.document;
+            if (doc) this._uploadModalOnComplete(doc);
+          }
           this._uploadModalOnComplete = null;
         }
 

@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const { body, param } = require('express-validator');
 const validate = require('../middleware/validation');
 const { authenticate, restrictToShareSession } = require('../middleware/auth');
 const { AppError } = require('../middleware/errorHandler');
 const { ChatService } = require('../services/chat/ChatService');
+const ChatUploadService = require('../services/chat/ChatUploadService');
+const DocumentProcessor = require('../services/documents/DocumentProcessor');
 const ConversationService = require('../services/sessions/ConversationService');
 const AutoSaveService = require('../services/sessions/AutoSaveService');
 const { streamingSessionManager } = require('../services/chat/StreamingSessionManager');
@@ -16,6 +19,59 @@ router.use(authenticate);
 
 // In share mode, restrict to the shared session
 router.use('/:sessionId', restrictToShareSession('sessionId'));
+
+const chatUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: DocumentProcessor.getMaxFileSize(),
+  },
+});
+
+/**
+ * POST /api/chat/:sessionId/upload
+ * Any file from the chat window. Supported document types go to the library.
+ * Other types are saved in the orchestrator working folder under Uploads.
+ */
+router.post('/:sessionId/upload',
+  chatUpload.single('file'),
+  [
+    param('sessionId').isInt().withMessage('Invalid session ID'),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return next(new AppError('No file uploaded', 400, 'NO_FILE'));
+      }
+      const sessionId = parseInt(req.params.sessionId, 10);
+      const result = await ChatUploadService.save(sessionId, req.userId, req.file, {
+        generateEmbeddings: req.body.generateEmbeddings !== 'false',
+      });
+      res.status(201).json({
+        success: true,
+        data: result,
+        message: result.kind === 'workspace'
+          ? `Saved "${result.filename}" in the orchestrator working folder: ${result.relativePath}`
+          : result.message,
+      });
+    } catch (error) {
+      const message = error.message || 'Upload failed';
+      if (error.statusCode) {
+        return next(new AppError(message, error.statusCode, error.code || 'UPLOAD_FAILED'));
+      }
+      if (message.includes('Duplicate document')) {
+        return next(new AppError(message, 409, 'DUPLICATE_DOCUMENT'));
+      }
+      if (message.includes('File too large')) {
+        return next(new AppError(message, 413, 'FILE_TOO_LARGE'));
+      }
+      if (message.includes('Unsupported file type')) {
+        return next(new AppError(message, 415, 'UNSUPPORTED_FILE_TYPE'));
+      }
+      next(error);
+    }
+  }
+);
 
 /**
  * POST /api/chat/:sessionId

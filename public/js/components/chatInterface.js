@@ -2980,6 +2980,19 @@ img { max-width: 100%; height: auto; }
   }
 
   /**
+   * Show a file that was saved in the orchestrator working folder (Uploads).
+   * The server already stored it as a context message.
+   */
+  showWorkspaceUpload(message) {
+    if (!message || message.id == null) return;
+    if (this.messages.some((existing) => existing.id === message.id)) return;
+    this.messages.push(message);
+    this.lastMessageCount = this.messages.length;
+    this.renderMessages();
+    this.loadContextTokenEstimates();
+  }
+
+  /**
    * Update the upload button badge with pending document count
    */
   updateUploadBadge() {
