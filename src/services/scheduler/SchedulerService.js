@@ -3,7 +3,7 @@
  * Runs due session_scheduled_jobs: prompt injection or script execution, then updates next_run_at.
  */
 
-const cronParser = require('cron-parser');
+const { CronExpressionParser } = require('cron-parser');
 const SessionScheduledJob = require('../../models/SessionScheduledJob');
 const WorkSession = require('../../models/WorkSession');
 const Message = require('../../models/Message');
@@ -29,11 +29,11 @@ function computeNextRunAt(job, afterIso = null) {
 
   if (job.schedule_type === 'cron') {
     try {
-      const interval = cronParser.parseExpression(job.schedule_value, { currentDate: after });
+      const interval = CronExpressionParser.parse(String(job.schedule_value || ''), { currentDate: after });
       const next = interval.next().toDate();
       return next.toISOString();
     } catch (err) {
-      logger.warn(`SchedulerService: invalid cron "${job.schedule_value}" for job ${job.id}, defaulting to 1h`);
+      logger.warn(`SchedulerService: invalid cron "${job.schedule_value}" for job ${job.id}, defaulting to 1h: ${err.message}`);
       const next = new Date(after.getTime() + 60 * 60 * 1000);
       return next.toISOString();
     }
