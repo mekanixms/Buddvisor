@@ -1619,6 +1619,7 @@ class ChatInterface {
       // Get username from metadata or fall back to current user
       let username = null;
       let telegramUsername = null;
+      let emailFrom = null;
       if (message.metadata) {
         try {
           const metadata = typeof message.metadata === 'string'
@@ -1627,6 +1628,9 @@ class ChatInterface {
           username = metadata?.username || null;
           if (metadata?.channel === 'telegram') {
             telegramUsername = metadata.telegram_username || 'Telegram';
+          }
+          if (metadata?.channel === 'email') {
+            emailFrom = metadata.email_from || metadata.email_subject || 'Email';
           }
         } catch (e) {
           // Invalid JSON, ignore
@@ -1641,9 +1645,12 @@ class ChatInterface {
       const telegramBadge = telegramUsername
         ? `<span class="badge bg-primary me-2" title="Sent from Telegram"><i class="bi bi-telegram me-1"></i>${escapeHtml(telegramUsername)}</span>`
         : '';
+      const emailBadge = emailFrom
+        ? `<span class="badge bg-secondary me-2" title="${escapeHtml(emailFrom)}"><i class="bi bi-envelope me-1"></i>Email</span>`
+        : '';
       const userBadge = (username
         ? `<span class="badge bg-info me-2">${escapeHtml(username)}</span>`
-        : '') + telegramBadge;
+        : '') + telegramBadge + emailBadge;
 
       const archivedBadge = isArchived
         ? '<span class="badge bg-secondary ms-2" title="This message is archived and not included in agent context"><i class="bi bi-archive"></i> Archived</span>'

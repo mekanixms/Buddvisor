@@ -16,6 +16,14 @@ const {
 // assignments, so the user can untick them in Configure Session → Tools.
 const DEFAULT_ORCHESTRATOR_TOOLS = ['manage_agent_documents', 'manage_agent_tools', 'send_to_telegram'];
 
+function scheduleEmailWatcherRefresh() {
+  try {
+    require('../email/EmailWatcher').scheduleEmailWatcherRefresh();
+  } catch (error) {
+    logger.warn(`Email watcher refresh skipped: ${error.message}`);
+  }
+}
+
 class SessionService {
   static DEFAULT_ORCHESTRATOR_TOOLS = DEFAULT_ORCHESTRATOR_TOOLS;
 
@@ -752,6 +760,7 @@ class SessionService {
       logger.info(`Updated per-agent tool assignments for session ${sessionId}: ${rows.length} mappings`);
 
       await syncSessionStorageLinks(sessionId);
+      scheduleEmailWatcherRefresh();
     } catch (error) {
       logger.error('Error setting tool agent assignments:', error);
       throw error;
@@ -801,6 +810,7 @@ class SessionService {
       logger.info(`Updated orchestrator tool assignments for session ${sessionId}: ${normalizedAssignments.length} tools`);
 
       await syncSessionStorageLinks(sessionId);
+      scheduleEmailWatcherRefresh();
     } catch (error) {
       logger.error('Error setting orchestrator tool assignments:', error);
       throw error;

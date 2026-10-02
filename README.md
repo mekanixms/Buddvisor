@@ -90,7 +90,6 @@ cp .env.example .env
    - Generate a 32-character `ENCRYPTION_KEY` for API key encryption
    - Set `SUPERUSER_NAME` to the username that should have admin privileges (optional)
    - Configure LLM provider API keys (optional, can be set per agent)
-   - Configure SMTP settings for email tool (optional)
 
    **Generating `JWT_SECRET` and `ENCRYPTION_KEY`:** you can generate both values using Node.js:
    ```bash

@@ -29,6 +29,8 @@ const { registerSessionScheduleTool } = require('./src/services/tools/sessionSch
 const { registerAgentDocumentsTool } = require('./src/services/tools/agentDocumentsTool');
 const { registerAgentToolsTool } = require('./src/services/tools/agentToolsTool');
 const { registerTelegramSendTool } = require('./src/services/tools/telegramSendTool');
+const { registerEmailTool } = require('./src/services/tools/emailTool');
+const { startEmailWatchers, stopEmailWatchers } = require('./src/services/email/EmailWatcher');
 const { schedulerService } = require('./src/services/scheduler/SchedulerService');
 const TelegramService = require('./src/services/telegram/TelegramService');
 const { toolRegistry } = require('./src/services/tools/ToolRegistry');
@@ -186,6 +188,7 @@ registerSessionScheduleTool();
 registerAgentDocumentsTool();
 registerAgentToolsTool();
 registerTelegramSendTool();
+registerEmailTool();
 logger.info(`Registered ${toolRegistry.count} built-in tools`);
 
 // Run database migrations and start server
@@ -205,6 +208,9 @@ runMigrations().then(() => {
 
     // Start Telegram long-polling for sessions with a connected bot
     TelegramService.startAll();
+
+    // IMAP IDLE / POP3 poll for sessions with the email tool and notify enabled
+    startEmailWatchers();
 
     console.log(`\n🚀 Buddvisor Server`);
     console.log(`📡 Server running on port ${PORT}`);
@@ -230,6 +236,12 @@ const gracefulShutdown = async (signal) => {
     TelegramService.stopAll();
   } catch (error) {
     logger.error('Error stopping Telegram pollers:', error);
+  }
+
+  try {
+    stopEmailWatchers();
+  } catch (error) {
+    logger.error('Error stopping email watchers:', error);
   }
   
   // Stop state persist cleanup interval

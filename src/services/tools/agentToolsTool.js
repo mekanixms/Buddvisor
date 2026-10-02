@@ -279,6 +279,11 @@ async function runChange({ action, sessionId, agents, tools, agentRefs, toolConf
   const notes = [];
   if (totalChanged > 0) {
     await refreshStorageLinks(sessionId);
+    try {
+      require('../email/EmailWatcher').scheduleEmailWatcherRefresh();
+    } catch (err) {
+      logger.warn(`email watcher refresh skipped: ${err.message}`);
+    }
 
     if (isAssign) {
       const after = groupByAgent(await WorkSession.getToolAgentAssignments(sessionId));
@@ -340,7 +345,9 @@ function registerAgentToolsTool() {
       'Use it when the user says things like "give @Tax Advisor the web_search tool" or "remove terminal from @Accountant". ' +
       'Tools are matched by name (wildcards * and ? supported, e.g. "session_*"); agents by name (leading @ is fine) or numeric id. ' +
       'Some tools need a tool_config: sqlite_local_db {database_name}, local_working_folder {folder_name}, ' +
-      'ef_api {base_url, username, password}, open_memory {base_url}. terminal and workspace_exec also need local_working_folder. ' +
+      'ef_api {base_url, username, password}, open_memory {base_url}. ' +
+      'email needs tool_config {protocol, incoming_host, username, password, smtp_host} from Configure Session. ' +
+      'terminal and workspace_exec also need local_working_folder. ' +
       'Actions: "assign", "remove", "list" (shows each agent\'s tools and the tools available; optional "tools" filter). ' +
       'Call it once per request and report the outcome to the user.',
     category: 'session',

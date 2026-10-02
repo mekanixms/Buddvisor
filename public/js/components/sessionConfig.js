@@ -542,7 +542,11 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                                       </div>
                                       <small class="text-muted d-block mt-1" style="font-size: 0.65rem;">OpenMemory</small>
                                     `;
-                                  })() : `
+                                  })() : tool.name === 'email' ? renderEmailToolConfig({
+                                    cfg: this.getOrchestratorToolConfig(tool.name) || {},
+                                    enabled: this.isOrchestratorToolAssigned(tool.name),
+                                    isOrchestrator: true,
+                                  }) : `
                                     <input
                                       class="form-check-input orchestrator-tool-checkbox"
                                       type="checkbox"
@@ -642,6 +646,18 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                                           <label class="small mb-0"><input type="checkbox" data-config-key="reject_unauthorized" ${cfg.reject_unauthorized !== false ? 'checked' : ''}> Verify SSL</label>
                                         </div>
                                         <small class="text-muted d-block mt-1" style="font-size: 0.65rem;">OpenMemory</small>
+                                      </td>
+                                    `;
+                                  }
+
+                                  if (tool.name === 'email') {
+                                    return `
+                                      <td class="text-center align-top">
+                                        ${renderEmailToolConfig({
+                                          cfg: toolConfig || {},
+                                          enabled: isAssigned,
+                                          agentId: a.id,
+                                        })}
                                       </td>
                                     `;
                                   }
@@ -2414,6 +2430,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       const orchestratorToolConfigInputs = Array.from(document.querySelectorAll('.orchestrator-tool-config-input'));
       const orchestratorEfApiBlocks = Array.from(document.querySelectorAll('.ef-api-config-block[data-is-orchestrator="true"]'));
       const orchestratorOpenMemoryBlocks = Array.from(document.querySelectorAll('.open-memory-config-block[data-is-orchestrator="true"]'));
+      const orchestratorEmailBlocks = Array.from(document.querySelectorAll('.email-config-block[data-is-orchestrator="true"]'));
       
       const orchestratorAssignments = [];
       
@@ -2482,6 +2499,13 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
           });
         }
       }
+
+      for (const block of orchestratorEmailBlocks) {
+        const emailConfig = readEmailToolConfig(block, this.getOrchestratorToolConfig('email'));
+        if (emailConfig) {
+          orchestratorAssignments.push({ tool_name: 'email', tool_config: emailConfig });
+        }
+      }
       
       await api.sessions.setOrchestratorTools(this.currentSession.id, orchestratorAssignments);
 
@@ -2534,8 +2558,9 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       const toolConfigInputs = Array.from(document.querySelectorAll('.tool-config-input'));
       const agentEfApiBlocks = Array.from(document.querySelectorAll('.ef-api-config-block[data-agent-id]'));
       const agentOpenMemoryBlocks = Array.from(document.querySelectorAll('.open-memory-config-block[data-agent-id]'));
+      const agentEmailBlocks = Array.from(document.querySelectorAll('.email-config-block[data-agent-id]'));
       
-      if (toolCheckboxes.length > 0 || toolConfigInputs.length > 0 || agentEfApiBlocks.length > 0 || agentOpenMemoryBlocks.length > 0) {
+      if (toolCheckboxes.length > 0 || toolConfigInputs.length > 0 || agentEfApiBlocks.length > 0 || agentOpenMemoryBlocks.length > 0 || agentEmailBlocks.length > 0) {
         const map = {};
         const toolConfigsMap = {};
         
@@ -2612,6 +2637,18 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
             if (!toolConfigsMap[toolName]) toolConfigsMap[toolName] = {};
             toolConfigsMap[toolName][agentId] = { base_url: baseUrl, api_key: apiKey || undefined, session_scope: sessionScope, agent_scope: agentScopeVal, reject_unauthorized: verifySsl };
           }
+        }
+
+        for (const block of agentEmailBlocks) {
+          const toolName = block.dataset.toolName;
+          const agentId = parseInt(block.dataset.agentId);
+          if (toolName !== 'email' || !Number.isFinite(agentId)) continue;
+          const emailConfig = readEmailToolConfig(block, this.getToolConfigForAgent('email', agentId));
+          if (!emailConfig) continue;
+          if (!map[toolName]) map[toolName] = [];
+          if (!map[toolName].includes(agentId)) map[toolName].push(agentId);
+          if (!toolConfigsMap[toolName]) toolConfigsMap[toolName] = {};
+          toolConfigsMap[toolName][agentId] = emailConfig;
         }
         
         const assignments = Object.entries(map).map(([toolName, agentIds]) => ({

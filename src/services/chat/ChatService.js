@@ -191,7 +191,7 @@ class ChatService {
    * Process a user message and generate response
    */
   static async processMessage(sessionId, userId, userMessage, options = {}) {
-    const { stream = false, onChunk = null, attachedDocumentsInfo = null, directAgentIds = null, metadataExtra = null } = options;
+    const { stream = false, onChunk = null, attachedDocumentsInfo = null, directAgentIds = null, metadataExtra = null, orchestratorDirect = false } = options;
 
     try {
       // Get full session (agents, documents, document_agent_assignment_map) for appending documents list to user message
@@ -302,8 +302,9 @@ class ChatService {
         processedMediaCacheByAgentId[agent.id] = await getProcessedMediaCacheInfo(sessionId, agent.id);
       }
 
-      // Check if we have agents assigned
-      if (agents.length === 0) {
+      // Check if we have agents assigned. Incoming email for the orchestrator's
+      // own mailbox uses orchestratorDirect so it is not routed to a specialist.
+      if (agents.length === 0 || orchestratorDirect) {
         // No agents - use orchestrator directly with tools and documents (same flow as handleDirectly)
         const orchestratorResult = await OrchestratorAgent.handleDirectly(
           session,

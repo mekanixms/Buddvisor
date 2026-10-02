@@ -499,7 +499,7 @@ class Message {
     try {
       const messages = await dbAll(
         `SELECT * FROM (
-           SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived
+           SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived, sort_index
            FROM messages
            WHERE session_id = ?
            ORDER BY ${ORDER_DESC}
@@ -528,9 +528,10 @@ class Message {
   static async getContextForAgent(sessionId, agentId, limit = process.env.DEFAULT_MESSAGE_LIMIT_CONTEXT_LENGTH || 10) {
     try {
       // User messages, this agent's messages, and conversation summaries, within the window.
+      // sort_index has to be selected: the outer ORDER BY only sees subquery columns.
       const messages = await dbAll(
         `SELECT * FROM (
-           SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived
+           SELECT id, session_id, role, content, agent_id, agent_name, tokens_used, created_at, archived, sort_index
            FROM messages
            WHERE session_id = ?
              AND (
