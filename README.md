@@ -41,9 +41,10 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Multi-Agent System**: User-defined specialized agents (legal, accounting, marketing, sales, etc.)
 - **Adaptive Orchestration**: Intelligent task routing with sequential or parallel execution
 - **Two Orchestration Modes**: Classic router (agents keep their own history) or orchestrator-led delegation (orchestrator briefs agents, saving tokens)
+- **Decision-model router**: In Router mode, Nimble (local Ollama) or Jev (remote) can pick the handler. The orchestrator model still writes the answer when the route stays with the orchestrator
 - **Document Management**: Upload and manage documents with local embeddings (Transformers.js + FAISS)
 - **Chat & Task Modes**: Casual conversation or formal task submission
-- **MCP Tool Integration**: File system operations, web search, email
+- **Web search**: Brave Search via `web_search` (`BRAVE_SEARCH_API_KEY`)
 - **Multimodal Media Tool**: Process images/audio/video/PDF assigned to an agent via `process_media` (optional: ffmpeg for video, Poppler for PDF page vision)
 - **Local SQLite Database Tool**: Agents can create and manage isolated SQLite databases via `sqlite_local_db`
 - **Local Working Folder Tool**: Agents can manage files and directories in isolated workspaces via `local_working_folder`
@@ -51,9 +52,15 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Terminal Tool**: Persistent, named interactive shell sessions (Linux/macOS) confined to the agent's workspace via `terminal`, with its own `logs/terminal.log`
 - **State Persistence Tool**: Fast in-memory key-value storage for session variables via `state_persist`
 - **Datetime Tool**: Current date/time (optional format and timezone) via `datetime`
+- **Email**: Read and send mail over IMAP or POP3 and SMTP via `email`. New mail can be posted into the session
+- **Telegram**: Link a bot to a session so Telegram chats use the normal pipeline. `send_to_telegram` uploads a workspace file or session document back to those chats
+- **Session pool**: Shared in-memory team memory via `session_pool` (read teammates, write only your own namespace)
+- **OpenMemory**: Long-term memory via `open_memory`
+- **Session schedule**: Agents add, edit, remove, or list this session's scheduled jobs via `session_schedule`
+- **Orchestrator admin tools**: `manage_agent_documents` and `manage_agent_tools` do what Configure Session → Documents and Tools do, from chat
 - **Archived Conversation History Tool**: Read and export conversation history with filtering, chunking, and export capabilities via `archived_conversation_history`
 - **Interactive HTML/JS Artifacts**: Agents can create visualizations, charts, and interactive content rendered in iframes
-- **Multiple LLM Providers**: Claude, OpenAI, Gemini, DeepSeek, Qwen, Granite (cloud) + Ollama (local)
+- **Multiple LLM Providers**: Claude, OpenAI, Gemini, xAI, DeepSeek, Qwen, Kimi, and a running llama.cpp server, plus Ollama locally
 - **Multi-User Support**: Basic authentication with user isolation
 - **Superuser Management**: Admin user management with password reset and user deletion capabilities
 
@@ -182,7 +189,7 @@ Buddvisor/
 │   │   ├── orchestrator/              # Task orchestration
 │   │   ├── agents/                    # Agent management
 │   │   ├── documents/                 # Document processing
-│   │   ├── mcp/                       # MCP tools
+│   │   ├── tools/                     # Built-in agent tools
 │   │   └── auth/                      # Authentication
 │   ├── providers/                     # LLM provider adapters
 │   ├── models/                        # Database models
@@ -382,6 +389,17 @@ Notes for orchestrator-led mode:
 - `@agent` mentions and scheduled jobs always address agents directly, in both modes.
 - If no orchestrator API key is configured, the session falls back to classic routing.
 
+### Decision model (Router mode)
+
+In **Configure Session → Orchestrator**, while Orchestration Mode is **Router**, turn on **Use a decision model for routing**. Nimble or Jev then chooses the handler. They do not write the user-facing answer.
+
+- **Local (Ollama)** calls `POST /v1/systemone` on the host and port saved for the decision model (Ollama 0.35 or later). The model id is `nimble`.
+- **Remote (Jev)** uses the same request at `TYPESAFE_BASE_URL` (default `https://api.typesafe.ai`) with model `jev-latest`. Leave the API key blank to use `TYPESAFE_API_KEY`.
+
+Each specialist is one choice. The choice text includes that agent's role and assigned tool names, not full tool schemas. `direct` is the orchestrator, including its own tools (document assignment, tool assignment, Telegram sends). A second specialist is added only when the model says another one is needed and a runner-up is strong enough. When the choice is `direct`, the orchestrator model configured above still writes the reply.
+
+Orchestrator-led mode and brainstorming ignore this switch. If the decision-model call fails, routing falls back to the generative orchestrator.
+
 ### LLM Providers
 
 Each agent can use a different LLM provider. Configure when creating an agent:
@@ -390,8 +408,10 @@ Each agent can use a different LLM provider. Configure when creating an agent:
 - **OpenAI** (GPT): Requires `OPENAI_API_KEY`
 - **Gemini** (Google): Requires `GOOGLE_API_KEY`
 - **DeepSeek**: Requires `DEEPSEEK_API_KEY`
-- **Qwen**: Requires API key
-- **Granite**: Requires API key
+- **Qwen**: Requires `DASHSCOPE_API_KEY` or `QWEN_API_KEY`
+- **xAI**: Requires `XAI_API_KEY`
+- **Kimi**: Requires `KIMI_API_KEY` or `MOONSHOT_API_KEY` (`KIMI_BASE_URL`, default `https://api.moonshot.ai/v1`)
+- **llama.cpp**: A running `llama-server`. In the agent or orchestrator form, choose provider `llamacpp` and set host and port (default `localhost:8080`). The app stores that as a `baseURL` ending in `/v1` and calls `POST /v1/chat/completions`. One process usually serves one GGUF; the model field is the `-a` alias, or the id from `GET /v1/models` when the server is in router mode. Tool calls work when that server was started with `--jinja` and a tool-capable chat template. Optional API key, or `LLAMACPP_API_KEY`. Optional default URL: `LLAMACPP_BASE_URL`.
 - **Ollama** (Local): Requires Ollama running locally. To use an Ollama server on another machine (e.g. on your LAN):
   - **Option A (all sessions):** set `OLLAMA_BASE_URL=http://<host>:11434` in `.env` (e.g. `http://192.168.1.10:11434`).
   - **Option B (per session):** in **Configure Session → Orchestrator**, choose Ollama, then set **Ollama Address** to the hostname or IP (e.g. `192.168.1.10`) and **Ollama Port** to `11434` (or paste a full URL like `http://192.168.1.10:11434` into the address field).
@@ -406,20 +426,67 @@ You can restrict which tools appear in the **Tools view** (`nav-tools`) and **Co
 ```env
 # Comma-separated list of tool names. Only these tools are shown in the UI.
 # If empty or not set, all registered tools are shown.
-ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,terminal,state_persist,datetime,session_pool,ef_api,archived_conversation_history,conversation_rounds,session_schedule,manage_agent_documents,manage_agent_tools
+ENABLED_TOOLS=web_search,webhook_request,process_media,sqlite_local_db,local_working_folder,workspace_exec,terminal,state_persist,datetime,email,send_to_telegram,session_pool,ef_api,open_memory,archived_conversation_history,conversation_rounds,session_schedule,manage_agent_documents,manage_agent_tools
 ```
 
 - **Empty or unset:** All registered tools are shown (default behavior).
 - **Set:** Only tools listed appear in the Tools view and Configure Session → Tools.
 - **Filter is display-only:** Tools remain registered on the backend; existing assignments continue to work. Users simply cannot see or assign tools that are not in the list.
 
-### MCP Tools
+### Agent Tool: `web_search`
 
-Configure in `.env`:
+Searches the web with the Brave Search API. Set `BRAVE_SEARCH_API_KEY`. Assign `web_search` in **Configure Session → Tools**.
 
-- **File System**: Sandboxed operations in user directories
-- **Web Search**: Requires search API key (optional)
-- **Email**: Requires SMTP configuration
+### Agent Tool: `email` (IMAP / POP3 / SMTP)
+
+Reads and sends mail. Assign it in **Configure Session → Tools** to the orchestrator or a session agent. Credentials are only the values saved there. A blank host, username, or password means that side is not configured. SMTP uses the same username and password as the incoming mailbox.
+
+Incoming mail is IMAP or POP3 over TLS (implicit TLS, or STARTTLS when implicit TLS is off). SMTP is port 465 for implicit TLS; any other port requires STARTTLS. Cleartext is refused.
+
+**Actions:** `status`, `list`, `read`, `send`, `mark_read`, `mark_unread`, `archive`, `move`, `spam`, `list_folders`, `create_folder`, `delete_folder`, `rename_folder`. Message ids are IMAP UIDs or POP3 UIDLs. Mark, archive, move, spam, and folder changes need IMAP. POP3 is list, read, and send only.
+
+With **Notify on new mail** (default on), IMAP stays in IDLE and POP3 is polled (`EMAIL_POP3_POLL_MS`, default 2 minutes). Arrivals are posted into the session as user messages. Mail already in the mailbox when a watcher first starts is not posted. A mailbox on an agent is handled by that agent; the orchestrator's mailbox is handled by the orchestrator. Cap: `EMAIL_INBOUND_MAX_PER_HOUR` (default 30).
+
+`read` with `save_attachments` writes into `local_working_folder` (`email_attachments/` by default). `send` accepts workspace paths or `content_base64`.
+
+### Telegram
+
+**Configure Session → Telegram** connects one bot to the session (token from BotFather). The token is stored encrypted and is never sent back to the browser. A bot can serve only one session. The owner links private chats by scanning a QR code or opening the `t.me` / `tg://` link. Pairing codes are single use (`TELEGRAM_PAIRING_TTL_MINUTES`, default 10). The bot long-polls `getUpdates`, so it works on localhost without a public webhook.
+
+Text from a linked chat goes through the normal chat pipeline. Photos, videos, audio, and documents the app can store become session documents for the orchestrator; other files can land in the orchestrator working folder. Messages stored in the session are forwarded to the linked chats. `/start`, `/status`, `/unlink`, and `/help` are chat commands.
+
+**`send_to_telegram`** uploads a workspace file or a session document to every linked chat. Images Telegram can show inline go out with `sendPhoto`; video and audio use `sendVideo` / `sendAudio`; everything else is a `sendDocument`. It is pre-checked for the orchestrator and can be assigned to agents. Asking to send a file is routed to the orchestrator, which must call the tool.
+
+Optional env: `TELEGRAM_POLL_TIMEOUT_SECONDS`, `TELEGRAM_API_BASE`, `TELEGRAM_MAX_DOWNLOAD_MB` (default 20).
+
+### Agent Tool: `session_pool` (Shared Team Memory)
+
+In-memory keys shared by agents in the same session who have this tool. Each agent reads teammates' namespaces and writes only its own. Operations: `set`, `get`, `delete`, `list`, `clear`, `get_from`, `list_pool`, `changes_since`. Limits per namespace: 100 keys, 10KB total, 1KB per value.
+
+### Agent Tool: `open_memory` (Long-Term Memory)
+
+Stores and recalls facts through an [OpenMemory](https://openmemory.cavira.app/docs) server. Configure Session → Tools shows a base URL (required), optional API key, session scope, agent scope, and a verify-SSL checkbox. Operations: `add`, `query`, `get`, `delete`, `list`, `health`.
+
+### Agent Tool: `ef_api` (XML Invoice Viewer)
+
+REPL-style access to a remote XML Invoice Viewer. Configure Session → Tools takes JSON: `base_url`, `username`, `password`, and optional `reject_unauthorized`. The tool logs in, caches the JWT, and can search, view, upload, and delete invoices, plus documents, tags, reminders, and analytics. See `ef-API.md`.
+
+### Agent Tool: `session_schedule`
+
+A session agent with this tool can `add`, `edit`, `remove`, or `list` scheduled jobs for the current session. Jobs are cron or interval, type `prompt` (inject a chat message) or `script` (run a command in that agent's workspace; needs `workspace_exec` and `local_working_folder`). `task_key` is unique per session.
+
+### Agent Tool: `conversation_rounds`
+
+During brainstorming, `get`, `set_current`, and `set_max` read or change the round counters. It only works while conversation mode is active.
+
+### Orchestrator tools: `manage_agent_documents` and `manage_agent_tools`
+
+These are pre-checked for the orchestrator on new sessions. Untick and save to turn one off.
+
+- **`manage_agent_documents`**: `assign`, `remove`, or `list` documents for session agents, the same effect as **Configure Session → Documents**. Example: assign `FileName.*` to `@AgentName`.
+- **`manage_agent_tools`**: `assign`, `remove`, or `list` tools for session agents. Tools that need a config (`sqlite_local_db`, `local_working_folder`, `ef_api`, `open_memory`, `email`) are not assigned until a `tool_config` is given. The orchestrator's own tool set is not editable through this tool.
+
+Session agents that call either tool get an error.
 
 ### Agent Tool: `webhook_request` (Outbound Webhooks / n8n)
 
