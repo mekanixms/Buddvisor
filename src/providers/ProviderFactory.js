@@ -7,6 +7,7 @@ const DeepSeekProvider = require('./DeepSeekProvider');
 const QwenProvider = require('./QwenProvider');
 const KimiProvider = require('./KimiProvider');
 const LlamaCppProvider = require('./LlamaCppProvider');
+const OpenRouterProvider = require('./OpenRouterProvider');
 const logger = require('../utils/logger');
 
 /**
@@ -27,6 +28,7 @@ class ProviderFactory {
     qwen: QwenProvider,
     kimi: KimiProvider,
     llamacpp: LlamaCppProvider,
+    openrouter: OpenRouterProvider,
   };
 
   /**
@@ -196,8 +198,15 @@ class ProviderFactory {
     }
 
     // For OpenAI-compatible providers, baseURL is optional
-    if (['deepseek', 'qwen', 'kimi'].includes(normalizedType) && config.baseURL && typeof config.baseURL !== 'string') {
+    if (['deepseek', 'qwen', 'kimi', 'openrouter'].includes(normalizedType) && config.baseURL && typeof config.baseURL !== 'string') {
       errors.push('baseURL must be a string');
+    }
+
+    if (normalizedType === 'openrouter' && config.openrouterSort != null && String(config.openrouterSort).trim() !== '') {
+      const sort = String(config.openrouterSort).trim().toLowerCase();
+      if (!OpenRouterProvider.SORTS.includes(sort)) {
+        errors.push('openrouterSort must be price or throughput');
+      }
     }
 
     // Validate model if specified

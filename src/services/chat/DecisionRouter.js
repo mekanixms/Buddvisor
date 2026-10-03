@@ -1,11 +1,13 @@
 /**
  * Router-mode decision model.
- * Nimble (local Ollama) and Jev (remote) score a fixed set of handlers.
+ * Nimble (local Ollama) and Jev (remote, or a Jev id on OpenRouter) score a fixed set of handlers.
+ * Other OpenRouter models are asked for the same choice as JSON.
  * They do not write the user-facing answer.
  */
 
 const axios = require('axios');
 const WorkSession = require('../../models/WorkSession');
+const OpenRouterProvider = require('../../providers/OpenRouterProvider');
 const logger = require('../../utils/logger');
 const { usageFromResponse } = require('./tokenUsage');
 
@@ -26,12 +28,15 @@ const TELEGRAM_SEND_TOOL = 'send_to_telegram';
 const DEFAULT_MODELS = {
   ollama: 'nimble',
   jev: 'jev-latest',
+  openrouter: 'google/gemini-2.5-flash',
 };
 
 const DEFAULT_BASE_URLS = {
   ollama: 'http://localhost:11434',
   jev: 'https://api.typesafe.ai',
 };
+
+const DECISION_PROVIDERS = ['ollama', 'jev', 'openrouter'];
 
 function truncate(text, max) {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
@@ -82,11 +87,71 @@ function systemOneURL(baseURL) {
   return `${trimmed}/v1/systemone`;
 }
 
+/**
+ * Jev on OpenRouter is a decisions model. Chat completions reject it.
+ * @param {string} model
+ */
+function isJevDecisionModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  if (value === 'jev' || value.startsWith('jev-')) return true;
+  return value.startsWith('typesafe/jev') || value.startsWith('~typesafe/jev');
+}
+
+/**
+ * Decisions API ids are typesafe/jev-… or the ~typesafe/jev-latest alias.
+ * @param {string} model
+ */
+function decisionsModelId(model) {
+  const value = String(model || '').trim();
+  const lower = value.toLowerCase();
+  if (lower === 'jev' || lower === 'jev-latest') return '~typesafe/jev-latest';
+  if (lower.startsWith('typesafe/') || lower.startsWith('~typesafe/')) return value;
+  if (lower.startsWith('jev-')) return `typesafe/${value}`;
+  return value;
+}
+
+/**
+ * Chat base https://openrouter.ai/api/v1 → https://openrouter.ai/api/alpha/decisions.
+ * @param {string} baseURL
+ */
+function openRouterDecisionsURL(baseURL) {
+  const trimmed = String(baseURL || '').replace(/\/+$/, '');
+  if (trimmed.endsWith('/alpha/decisions')) return trimmed;
+  return `${trimmed.replace(/\/v1$/, '')}/alpha/decisions`;
+}
+
 function normalizeModel(provider, model) {
   const value = String(model || '').trim();
+  if (provider === 'openrouter') return value || DEFAULT_MODELS.openrouter;
   if (provider === 'jev' && (value === 'jev' || value === 'jev-latest')) return 'jev-latest';
   if (provider === 'ollama' && value === 'nimble') return 'nimble';
   return DEFAULT_MODELS[provider];
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || '').trim();
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1].trim() : raw;
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(candidate.slice(start, end + 1));
+    throw _;
+  }
+}
+
+function noulFrom(value) {
+  if (typeof value === 'boolean') return value ? 0.8 : 0.1;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true' || lower === 'yes') return 0.8;
+    if (lower === 'false' || lower === 'no') return 0.1;
+  }
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 0.1;
+  return Math.min(1, Math.max(0, score));
 }
 
 function agentKey(agentId) {
@@ -148,14 +213,45 @@ class DecisionRouter {
   }
 
   /**
-   * Connection for the saved provider. Null when Jev has no API key or the provider is unknown.
+   * Connection for the saved provider. Null when a remote provider has no API key.
    */
   static resolveConnection(session) {
     const provider = session?.decision_model_provider;
-    if (provider !== 'ollama' && provider !== 'jev') return null;
+    if (!DECISION_PROVIDERS.includes(provider)) return null;
 
     const config = readConfig(session.decision_model_config);
     const model = normalizeModel(provider, config.model);
+    let timeout = parseInt(config.timeout, 10);
+    if (!timeout || timeout < 1000 || timeout > 600000) timeout = 60000;
+
+    if (provider === 'openrouter') {
+      const configuredKey = config.apiKey && String(config.apiKey).trim();
+      const apiKey = configuredKey
+        || (process.env.OPENROUTER_API_KEY && String(process.env.OPENROUTER_API_KEY).trim())
+        || null;
+      if (!apiKey) return null;
+      const baseURL = OpenRouterProvider.resolveBaseURL(config.baseURL);
+      if (isJevDecisionModel(model)) {
+        return {
+          provider,
+          kind: 'decisions',
+          model: decisionsModelId(model),
+          apiKey,
+          timeout,
+          url: openRouterDecisionsURL(baseURL),
+        };
+      }
+      return {
+        provider,
+        kind: 'chat',
+        model,
+        apiKey,
+        timeout,
+        baseURL,
+        openrouterSort: OpenRouterProvider.normalizeSort(config.openrouterSort),
+      };
+    }
+
     const fallback = provider === 'ollama'
       ? (process.env.OLLAMA_BASE_URL || DEFAULT_BASE_URLS.ollama)
       : (process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URLS.jev);
@@ -166,11 +262,9 @@ class DecisionRouter {
       if (!apiKey) return null;
     }
 
-    let timeout = parseInt(config.timeout, 10);
-    if (!timeout || timeout < 1000 || timeout > 600000) timeout = 60000;
-
     return {
       provider,
+      kind: 'systemone',
       model,
       apiKey,
       timeout,
@@ -310,6 +404,103 @@ class DecisionRouter {
   }
 
   /**
+   * Chat prompt that asks for the same handler choice as /v1/systemone.
+   */
+  static buildOpenRouterMessages(systemOneBody) {
+    const criteria = systemOneBody?.questions?.handler?.criteria || {};
+    const lines = Object.entries(criteria).map(([key, text]) => `- ${key}: ${text}`);
+    const state = systemOneBody?.state || {};
+    const parts = [`User request:\n${state.request || ''}`];
+    if (state.session) parts.push(`Session context:\n${state.session}`);
+    if (state.documents) parts.push(state.documents);
+    parts.push(`Handlers:\n${lines.join('\n')}`);
+    parts.push([
+      'Reply with JSON only, no markdown.',
+      'Schema: {"choice":"<handler key>","confidence":0.0,"probabilities":{"<key>":0.0},"needs_another":0.0}.',
+      'choice must be one handler key.',
+      'probabilities must include every handler key.',
+      'needs_another is from 0 to 1: how likely a second specialist is also required.',
+    ].join(' '));
+    return [
+      {
+        role: 'system',
+        content: 'You route a user request to exactly one handler. You do not answer the user.',
+      },
+      { role: 'user', content: parts.join('\n\n') },
+    ];
+  }
+
+  /**
+   * Map a chat JSON reply onto the /v1/systemone answer shape. Null when the choice is unusable.
+   */
+  static parseOpenRouterDecision(content, model, systemOneBody) {
+    const keys = Object.keys(systemOneBody?.questions?.handler?.criteria || {});
+    if (!keys.length) return null;
+
+    let parsed;
+    try {
+      parsed = extractJsonObject(content);
+    } catch (_) {
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    const choice = String(parsed.choice || '').trim();
+    if (!keys.includes(choice)) return null;
+
+    const raw = parsed.probabilities && typeof parsed.probabilities === 'object' ? parsed.probabilities : {};
+    const probabilities = {};
+    let sum = 0;
+    for (const key of keys) {
+      const score = Number(raw[key]);
+      probabilities[key] = Number.isFinite(score) && score >= 0 ? score : 0;
+      sum += probabilities[key];
+    }
+    if (sum <= 0) {
+      const confidence = Number(parsed.confidence);
+      const winner = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.5;
+      const rest = keys.length > 1 ? (1 - winner) / (keys.length - 1) : 0;
+      for (const key of keys) probabilities[key] = key === choice ? winner : rest;
+    }
+
+    let confidence = Number(parsed.confidence);
+    if (!Number.isFinite(confidence)) confidence = probabilities[choice] || 0;
+
+    return {
+      model: model || parsed.model || DEFAULT_MODELS.openrouter,
+      answers: {
+        handler: {
+          type: 'choice',
+          choice,
+          probabilities,
+          confidence,
+        },
+        needs_another: { type: 'noul', noul: noulFrom(parsed.needs_another) },
+      },
+    };
+  }
+
+  static async postOpenRouter(connection, systemOneBody) {
+    const provider = new OpenRouterProvider({
+      apiKey: connection.apiKey,
+      model: connection.model,
+      baseURL: connection.baseURL,
+      openrouterSort: connection.openrouterSort,
+      timeout: connection.timeout,
+      temperature: 0,
+      maxTokens: 500,
+    });
+    const response = await provider.chat(this.buildOpenRouterMessages(systemOneBody), {
+      temperature: 0,
+      maxTokens: 500,
+    });
+    const shaped = this.parseOpenRouterDecision(response?.content, connection.model, systemOneBody);
+    if (!shaped) return null;
+    if (response?.usage) shaped.usage = response.usage;
+    return shaped;
+  }
+
+  /**
    * Score the user request. Returns null when the caller should use the generative router.
    */
   static async route({
@@ -360,12 +551,14 @@ class DecisionRouter {
     promptsLogger.info(`\n\n=== DECISION MODEL ROUTING ===\n${JSON.stringify(body, null, 2)}`);
 
     try {
-      const data = await this.postSystemOne({
-        url: connection.url,
-        body,
-        apiKey: connection.apiKey,
-        timeout: connection.timeout,
-      });
+      const data = connection.kind === 'chat'
+        ? await this.postOpenRouter(connection, body)
+        : await this.postSystemOne({
+          url: connection.url,
+          body,
+          apiKey: connection.apiKey,
+          timeout: connection.timeout,
+        });
       const decision = this.interpret(data, usableAgents, connection.model);
       if (!decision) {
         logger.warn('Decision model returned an unusable answer; falling back');

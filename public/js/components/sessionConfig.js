@@ -125,9 +125,15 @@ class SessionConfig {
     }
 
     const currentOrchestratorModel = this.currentOrchestratorModel;
-    const decisionProvider = this.currentSession.decision_model_provider === 'jev' ? 'jev' : 'ollama';
+    const decisionProvider = this.normalizeDecisionProvider(this.currentSession.decision_model_provider);
     const decisionConfig = this.currentSession.decision_model_config || {};
-    const decisionModel = decisionConfig.model || (decisionProvider === 'jev' ? 'jev-latest' : 'nimble');
+    const decisionModel = decisionConfig.model || this.defaultDecisionModel(decisionProvider);
+    const openRouterDecisionIds = this.openRouterDecisionModels().map((model) => model.id);
+    this.customDecisionModel = decisionProvider === 'openrouter'
+      && decisionModel
+      && !openRouterDecisionIds.includes(decisionModel)
+      ? decisionModel
+      : null;
     const routerMode = (this.currentSession.orchestration_mode || 'route') === 'route';
 
     // Get all available agents
@@ -744,6 +750,16 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                       </div>
                     </div>
 
+                    <div id="orchestrator-openrouter-config" class="mb-3 ${this.currentSession.orchestrator_provider_type === 'openrouter' ? '' : 'd-none'}">
+                      <label class="form-label" for="config-orchestrator-openrouter-sort">Routing</label>
+                      <select class="form-select" id="config-orchestrator-openrouter-sort">
+                        <option value="" ${this.currentSession.orchestrator_provider_config?.openrouterSort === 'price' || this.currentSession.orchestrator_provider_config?.openrouterSort === 'throughput' ? '' : 'selected'}>Default</option>
+                        <option value="price" ${this.currentSession.orchestrator_provider_config?.openrouterSort === 'price' ? 'selected' : ''}>Lowest price</option>
+                        <option value="throughput" ${this.currentSession.orchestrator_provider_config?.openrouterSort === 'throughput' ? 'selected' : ''}>Highest throughput</option>
+                      </select>
+                      <div class="form-text">Model ids look like author/slug (for example google/gemini-2.5-flash). Choose Custom… for any other OpenRouter model. Routing picks which upstream host serves that model. Default leaves the choice to OpenRouter.</div>
+                    </div>
+
                     <!-- Ollama Configuration (only visible when Ollama is selected) -->
                     <div id="orchestrator-ollama-config" class="row mb-3 d-none">
                       <div class="col-md-6">
@@ -825,25 +841,29 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                         </label>
                       </div>
                       <div class="form-text mb-3">
-                        Nimble (local) or Jev (remote) chooses the agent. The orchestrator model above still writes the answer when the route stays with the orchestrator.
+                        Nimble (local), Jev (remote), or an OpenRouter chat model chooses the agent. The orchestrator model above still writes the answer when the route stays with the orchestrator.
                       </div>
                       <div id="decision-model-settings" class="${this.currentSession.decision_model_enabled ? '' : 'd-none'}">
                         <div class="row mb-3">
                           <div class="col-md-6">
                             <label class="form-label">Decision Model Provider</label>
                             <select class="form-select" id="config-decision-model-provider" data-action="decision-model-provider-change">
-                              <option value="ollama" ${decisionProvider !== 'jev' ? 'selected' : ''}>Local (Ollama)</option>
+                              <option value="ollama" ${decisionProvider === 'ollama' ? 'selected' : ''}>Local (Ollama)</option>
                               <option value="jev" ${decisionProvider === 'jev' ? 'selected' : ''}>Remote (Jev)</option>
+                              <option value="openrouter" ${decisionProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
                             </select>
                           </div>
                           <div class="col-md-6">
                             <label class="form-label">Decision Model</label>
-                            <select class="form-select" id="config-decision-model-model">
+                            <select class="form-select" id="config-decision-model-model" data-action="decision-model-change">
                               ${this.decisionModelOptions(decisionProvider, decisionModel)}
                             </select>
+                            <div id="custom-decision-model-display" class="form-text text-info ${decisionProvider === 'openrouter' && this.customDecisionModel ? '' : 'd-none'}">
+                              <i class="bi bi-pencil"></i> Custom: <span id="custom-decision-model-value">${escapeHtml(this.customDecisionModel || '')}</span>
+                            </div>
                           </div>
                         </div>
-                        <div id="decision-model-ollama-config" class="row mb-3 ${decisionProvider === 'jev' ? 'd-none' : ''}">
+                        <div id="decision-model-ollama-config" class="row mb-3 ${decisionProvider === 'ollama' ? '' : 'd-none'}">
                           <div class="col-md-6">
                             <label class="form-label">Ollama Address</label>
                             <input type="text" class="form-control" id="config-decision-ollama-address"
@@ -857,13 +877,22 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                             <div class="form-text">Ollama port (default 11434). Requires Ollama 0.35 or later.</div>
                           </div>
                         </div>
-                        <div id="decision-model-jev-config" class="row mb-3 ${decisionProvider === 'jev' ? '' : 'd-none'}">
-                          <div class="col-md-12">
-                            <label class="form-label">Jev API Key</label>
-                            <input type="password" class="form-control" id="config-decision-model-api-key"
-                                   placeholder="Leave empty to use TYPESAFE_API_KEY"
-                                   value="${escapeHtml(this.getOrchestratorApiKey(decisionConfig))}">
-                            <div class="form-text">API key for api.typesafe.ai. Leave empty to use TYPESAFE_API_KEY from the environment.</div>
+                        <div id="decision-model-remote-config" class="mb-3 ${decisionProvider === 'ollama' ? 'd-none' : ''}">
+                          <label class="form-label" id="decision-model-api-key-label">${decisionProvider === 'openrouter' ? 'OpenRouter API Key' : 'Jev API Key'}</label>
+                          <input type="password" class="form-control" id="config-decision-model-api-key"
+                                 placeholder="${decisionProvider === 'openrouter' ? 'Leave empty to use OPENROUTER_API_KEY' : 'Leave empty to use TYPESAFE_API_KEY'}"
+                                 value="${escapeHtml(this.getOrchestratorApiKey(decisionConfig))}">
+                          <div class="form-text" id="decision-model-api-key-hint">${decisionProvider === 'openrouter'
+                            ? 'API key for OpenRouter. Leave empty to use OPENROUTER_API_KEY from the environment.'
+                            : 'API key for api.typesafe.ai. Leave empty to use TYPESAFE_API_KEY from the environment.'}</div>
+                          <div id="decision-model-openrouter-sort-wrap" class="mt-3 ${decisionProvider === 'openrouter' ? '' : 'd-none'}">
+                            <label class="form-label" for="config-decision-openrouter-sort">Routing</label>
+                            <select class="form-select" id="config-decision-openrouter-sort">
+                              <option value="" ${decisionConfig.openrouterSort === 'price' || decisionConfig.openrouterSort === 'throughput' ? '' : 'selected'}>Default</option>
+                              <option value="price" ${decisionConfig.openrouterSort === 'price' ? 'selected' : ''}>Lowest price</option>
+                              <option value="throughput" ${decisionConfig.openrouterSort === 'throughput' ? 'selected' : ''}>Highest throughput</option>
+                            </select>
+                            <div class="form-text">Model ids look like author/slug. Choose Custom… for any other OpenRouter model. Routing picks which upstream host serves that model.</div>
                           </div>
                         </div>
                       </div>
@@ -2163,9 +2192,9 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
    * Display name for a provider option.
    */
   providerOptionLabel(provider) {
-    const name = provider.type === 'llamacpp'
-      ? 'llama.cpp'
-      : provider.type.charAt(0).toUpperCase() + provider.type.slice(1);
+    const labels = { llamacpp: 'llama.cpp', openrouter: 'OpenRouter' };
+    const name = labels[provider.type]
+      || (provider.type.charAt(0).toUpperCase() + provider.type.slice(1));
     return `${name}${provider.requiresApiKey ? '' : ' (Local)'}`;
   }
 
@@ -2280,16 +2309,47 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
   }
 
   /**
-   * Options for the decision-model dropdown. Nimble locally, Jev remotely.
+   * Keep only the decision providers the server accepts.
+   */
+  normalizeDecisionProvider(provider) {
+    return ['ollama', 'jev', 'openrouter'].includes(provider) ? provider : 'ollama';
+  }
+
+  defaultDecisionModel(provider) {
+    if (provider === 'jev') return 'jev-latest';
+    if (provider === 'openrouter') return 'google/gemini-2.5-flash';
+    return 'nimble';
+  }
+
+  /**
+   * Curated OpenRouter ids for the decision-model dropdown.
+   */
+  openRouterDecisionModels() {
+    const models = this.providers.find((provider) => provider.type === 'openrouter')?.availableModels;
+    if (models?.length) {
+      return models.map((model) => ({ id: model.id, label: model.name || model.id }));
+    }
+    return [{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' }];
+  }
+
+  /**
+   * Options for the decision-model dropdown. Nimble locally, Jev remotely, OpenRouter chat models.
    */
   decisionModelOptions(provider, selected) {
-    const options = provider === 'jev'
-      ? [{ id: 'jev-latest', label: 'Jev' }]
-      : [{ id: 'nimble', label: 'Nimble' }];
-    const selectedId = options.some((option) => option.id === selected) ? selected : options[0].id;
-    return options.map((option) => (
-      `<option value="${option.id}" ${option.id === selectedId ? 'selected' : ''}>${escapeHtml(option.label)}</option>`
+    const normalized = this.normalizeDecisionProvider(provider);
+    let options;
+    if (normalized === 'jev') options = [{ id: 'jev-latest', label: 'Jev' }];
+    else if (normalized === 'openrouter') options = this.openRouterDecisionModels();
+    else options = [{ id: 'nimble', label: 'Nimble' }];
+
+    const known = options.some((option) => option.id === selected);
+    const customSelected = normalized === 'openrouter' && selected && !known;
+    const selectedId = known ? selected : options[0].id;
+    const html = options.map((option) => (
+      `<option value="${escapeHtml(option.id)}" ${!customSelected && option.id === selectedId ? 'selected' : ''}>${escapeHtml(option.label)}</option>`
     )).join('');
+    if (normalized !== 'openrouter') return html;
+    return `${html}<option value="__custom__" ${customSelected ? 'selected' : ''}>Custom...</option>`;
   }
 
   /**
@@ -2364,13 +2424,76 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
    * Swap the model list and the local/remote connection fields.
    */
   onDecisionModelProviderChange() {
-    const provider = document.getElementById('config-decision-model-provider')?.value === 'jev' ? 'jev' : 'ollama';
+    const provider = this.normalizeDecisionProvider(document.getElementById('config-decision-model-provider')?.value);
     const modelSelect = document.getElementById('config-decision-model-model');
+    if (provider !== 'openrouter') this.customDecisionModel = null;
     if (modelSelect) {
-      modelSelect.innerHTML = this.decisionModelOptions(provider, modelSelect.value);
+      const current = modelSelect.value === '__custom__' ? this.customDecisionModel : modelSelect.value;
+      const options = provider === 'openrouter' ? this.openRouterDecisionModels() : [];
+      const keep = provider === 'openrouter' && current && (options.some((model) => model.id === current) || this.customDecisionModel)
+        ? current
+        : null;
+      modelSelect.innerHTML = this.decisionModelOptions(provider, keep || undefined);
     }
-    document.getElementById('decision-model-ollama-config')?.classList.toggle('d-none', provider !== 'ollama');
-    document.getElementById('decision-model-jev-config')?.classList.toggle('d-none', provider !== 'jev');
+    this.updateDecisionModelFields(provider);
+    this.updateCustomDecisionModelDisplay();
+  }
+
+  /**
+   * Show host fields for Ollama, and the API key (plus routing) for Jev or OpenRouter.
+   */
+  updateDecisionModelFields(provider) {
+    const normalized = this.normalizeDecisionProvider(provider);
+    document.getElementById('decision-model-ollama-config')?.classList.toggle('d-none', normalized !== 'ollama');
+    document.getElementById('decision-model-remote-config')?.classList.toggle('d-none', normalized === 'ollama');
+    document.getElementById('decision-model-openrouter-sort-wrap')?.classList.toggle('d-none', normalized !== 'openrouter');
+    const label = document.getElementById('decision-model-api-key-label');
+    const input = document.getElementById('config-decision-model-api-key');
+    const hint = document.getElementById('decision-model-api-key-hint');
+    if (normalized === 'openrouter') {
+      if (label) label.textContent = 'OpenRouter API Key';
+      if (input) input.placeholder = 'Leave empty to use OPENROUTER_API_KEY';
+      if (hint) hint.textContent = 'API key for OpenRouter. Leave empty to use OPENROUTER_API_KEY from the environment.';
+    } else if (normalized === 'jev') {
+      if (label) label.textContent = 'Jev API Key';
+      if (input) input.placeholder = 'Leave empty to use TYPESAFE_API_KEY';
+      if (hint) hint.textContent = 'API key for api.typesafe.ai. Leave empty to use TYPESAFE_API_KEY from the environment.';
+    }
+  }
+
+  /**
+   * Accept any OpenRouter model id for the decision model.
+   */
+  onDecisionModelChange() {
+    const provider = this.normalizeDecisionProvider(document.getElementById('config-decision-model-provider')?.value);
+    const modelSelect = document.getElementById('config-decision-model-model');
+    if (!modelSelect || provider !== 'openrouter') return;
+    if (modelSelect.value !== '__custom__') {
+      this.customDecisionModel = null;
+      this.updateCustomDecisionModelDisplay();
+      return;
+    }
+    const entered = prompt(
+      'Enter an OpenRouter model id (author/slug, e.g. google/gemini-2.5-flash):',
+      this.customDecisionModel || ''
+    );
+    if (entered && entered.trim()) {
+      this.customDecisionModel = entered.trim();
+      this.updateCustomDecisionModelDisplay();
+      return;
+    }
+    this.customDecisionModel = null;
+    modelSelect.innerHTML = this.decisionModelOptions('openrouter');
+    this.updateCustomDecisionModelDisplay();
+  }
+
+  updateCustomDecisionModelDisplay() {
+    const display = document.getElementById('custom-decision-model-display');
+    const value = document.getElementById('custom-decision-model-value');
+    const provider = this.normalizeDecisionProvider(document.getElementById('config-decision-model-provider')?.value);
+    const show = provider === 'openrouter' && !!this.customDecisionModel;
+    if (value) value.textContent = this.customDecisionModel || '';
+    display?.classList.toggle('d-none', !show);
   }
 
   /**
@@ -2438,6 +2561,8 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
     if (llamaCppConfig) {
       llamaCppConfig.classList.toggle('d-none', providerType !== 'llamacpp');
     }
+
+    document.getElementById('orchestrator-openrouter-config')?.classList.toggle('d-none', providerType !== 'openrouter');
     
     // API key stays visible for llama.cpp (optional) and for cloud providers.
     const apiKeyConfig = document.getElementById('orchestrator-api-key-config');
@@ -2479,10 +2604,11 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
    * Show dialog to enter custom orchestrator model
    */
   showCustomOrchestratorModelDialog() {
-    const customModel = prompt(
-      'Enter the custom model ID (e.g., claude-3-5-sonnet-20241022):',
-      this.customOrchestratorModel || ''
-    );
+    const providerType = document.getElementById('config-orchestrator-provider')?.value;
+    const promptText = providerType === 'openrouter'
+      ? 'Enter an OpenRouter model id (author/slug, e.g. google/gemini-2.5-flash):'
+      : 'Enter the custom model ID (e.g., claude-3-5-sonnet-20241022):';
+    const customModel = prompt(promptText, this.customOrchestratorModel || '');
 
     const modelSelect = document.getElementById('config-orchestrator-model');
 
@@ -2638,6 +2764,13 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       if (orchestratorProvider === 'llamacpp') {
         orchestratorConfig.baseURL = this.buildLlamaCppBaseURLFromForm();
       }
+
+      if (orchestratorProvider === 'openrouter') {
+        const sort = document.getElementById('config-orchestrator-openrouter-sort')?.value || '';
+        if (sort === 'price' || sort === 'throughput') {
+          orchestratorConfig.openrouterSort = sort;
+        }
+      }
       
       // Add timeout if specified
       const timeoutInput = document.getElementById('config-orchestrator-timeout');
@@ -2664,15 +2797,20 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       const orchestrationMode = document.getElementById('config-orchestration-mode')?.value || 'route';
 
       const decisionEnabled = document.getElementById('config-decision-model-enabled')?.checked || false;
-      const decisionProvider = document.getElementById('config-decision-model-provider')?.value === 'jev' ? 'jev' : 'ollama';
-      const decisionModel = document.getElementById('config-decision-model-model')?.value
-        || (decisionProvider === 'jev' ? 'jev-latest' : 'nimble');
+      const decisionProvider = this.normalizeDecisionProvider(document.getElementById('config-decision-model-provider')?.value);
+      let decisionModel = document.getElementById('config-decision-model-model')?.value || '';
+      if (decisionModel === '__custom__') decisionModel = this.customDecisionModel || '';
+      if (!decisionModel) decisionModel = this.defaultDecisionModel(decisionProvider);
       const decisionConfig = { model: decisionModel };
       if (decisionProvider === 'ollama') {
         decisionConfig.baseURL = this.buildDecisionModelBaseURLFromForm();
       } else {
         const decisionApiKey = document.getElementById('config-decision-model-api-key')?.value?.trim();
         if (decisionApiKey) decisionConfig.apiKey = decisionApiKey;
+      }
+      if (decisionProvider === 'openrouter') {
+        const sort = document.getElementById('config-decision-openrouter-sort')?.value || '';
+        if (sort === 'price' || sort === 'throughput') decisionConfig.openrouterSort = sort;
       }
 
       // Update session
@@ -3042,6 +3180,9 @@ document.addEventListener('change', (e) => {
       break;
     case 'decision-model-provider-change':
       sessionConfig.onDecisionModelProviderChange();
+      break;
+    case 'decision-model-change':
+      sessionConfig.onDecisionModelChange();
       break;
   }
 });

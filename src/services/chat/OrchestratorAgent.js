@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const AgentService = require('../agents/AgentService');
 const ProviderFactory = require('../../providers/ProviderFactory');
+const OpenRouterProvider = require('../../providers/OpenRouterProvider');
 const { toolRegistry } = require('../tools/ToolRegistry');
 const { toolExecutor } = require('../tools/ToolExecutor');
 const { syncAssignedDocumentsToWorkspace } = require('../tools/localWorkingFolderTool');
@@ -202,6 +203,9 @@ class OrchestratorAgent {
       providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
         || process.env.LLAMACPP_BASE_URL
         || 'http://localhost:8080/v1';
+    }
+    if (providerType === 'openrouter') {
+      Object.assign(providerConfig, OpenRouterProvider.runtimeFields(session.orchestrator_provider_config));
     }
 
     const provider = ProviderFactory.create(providerType, providerConfig);
@@ -476,6 +480,9 @@ Which agent(s) should handle this request?`,
         ? (process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1')
         : (process.env.OLLAMA_BASE_URL || 'http://localhost:11434');
       providerConfig.baseURL = baseURL || fallback;
+    }
+    if (providerType === 'openrouter') {
+      Object.assign(providerConfig, OpenRouterProvider.runtimeFields(session.orchestrator_provider_config));
     }
     
     const provider = ProviderFactory.create(providerType, providerConfig);
@@ -784,6 +791,9 @@ Summary:`;
     if (providerType === 'ollama' || providerType === 'llamacpp') {
       logger.info(`${providerType} baseURL for session ${session.id}: ${providerConfig.baseURL}`);
     }
+    if (providerType === 'openrouter') {
+      Object.assign(providerConfig, OpenRouterProvider.runtimeFields(session.orchestrator_provider_config));
+    }
 
     const provider = ProviderFactory.create(providerType, providerConfig);
 
@@ -918,6 +928,8 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
       providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
         || process.env.LLAMACPP_BASE_URL
         || 'http://localhost:8080/v1';
+    } else if (providerType === 'openrouter') {
+      Object.assign(providerConfig, OpenRouterProvider.runtimeFields(session.orchestrator_provider_config));
     }
     const provider = ProviderFactory.create(providerType, providerConfig);
 
@@ -1674,6 +1686,7 @@ Always recommend consulting with a CPA for specific tax advice.`,
       kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
       ollama: 'not-required',
       llamacpp: process.env.LLAMACPP_API_KEY || 'not-required',
+      openrouter: process.env.OPENROUTER_API_KEY,
     };
     return envKeys[providerType];
   }
@@ -1712,6 +1725,7 @@ Always recommend consulting with a CPA for specific tax advice.`,
       gemini: 'gemini-2.5-flash',
       ollama: 'granite4:small-h',
       llamacpp: 'local',
+      openrouter: 'google/gemini-2.5-flash',
     };
     return defaultModels[providerType];
   }

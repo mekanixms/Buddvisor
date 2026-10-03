@@ -310,6 +310,16 @@ class AgentManager {
                   </div>
                 </div>
 
+                <div id="agent-openrouter-config" class="mb-3 ${agent?.provider_type === 'openrouter' ? '' : 'd-none'}">
+                  <label class="form-label" for="agent-openrouter-sort">Routing</label>
+                  <select class="form-select" id="agent-openrouter-sort">
+                    <option value="" ${agent?.provider_config?.openrouterSort === 'price' || agent?.provider_config?.openrouterSort === 'throughput' ? '' : 'selected'}>Default</option>
+                    <option value="price" ${agent?.provider_config?.openrouterSort === 'price' ? 'selected' : ''}>Lowest price</option>
+                    <option value="throughput" ${agent?.provider_config?.openrouterSort === 'throughput' ? 'selected' : ''}>Highest throughput</option>
+                  </select>
+                  <div class="form-text">Model ids look like author/slug (for example google/gemini-2.5-flash). Choose Custom… for any other OpenRouter model. Routing picks which upstream host serves that model. Default leaves the choice to OpenRouter.</div>
+                </div>
+
                 <div class="mb-3" id="api-key-group">
                   <label class="form-label" id="api-key-label">API Key ${isEdit ? '' : '*'}</label>
                   <div class="input-group">
@@ -849,6 +859,8 @@ class AgentManager {
       llamaCppConfig.classList.toggle('d-none', providerType !== 'llamacpp');
     }
 
+    document.getElementById('agent-openrouter-config')?.classList.toggle('d-none', providerType !== 'openrouter');
+
     this.refreshCapabilitiesAlert();
   }
 
@@ -910,9 +922,9 @@ class AgentManager {
    * Display name for a provider option.
    */
   providerOptionLabel(provider) {
-    const name = provider.type === 'llamacpp'
-      ? 'llama.cpp'
-      : provider.type.charAt(0).toUpperCase() + provider.type.slice(1);
+    const labels = { llamacpp: 'llama.cpp', openrouter: 'OpenRouter' };
+    const name = labels[provider.type]
+      || (provider.type.charAt(0).toUpperCase() + provider.type.slice(1));
     return `${name}${provider.requiresApiKey ? '' : ' (Local)'}`;
   }
 
@@ -994,7 +1006,11 @@ class AgentManager {
    */
   showCustomModelDialog() {
     const currentValue = this.customModel || '';
-    const customValue = prompt('Enter custom model name (e.g., gpt-4-turbo-preview, claude-3-opus-20240229):', currentValue);
+    const providerType = document.getElementById('agent-provider')?.value;
+    const promptText = providerType === 'openrouter'
+      ? 'Enter an OpenRouter model id (author/slug, e.g. google/gemini-2.5-flash):'
+      : 'Enter custom model name (e.g., gpt-4-turbo-preview, claude-3-opus-20240229):';
+    const customValue = prompt(promptText, currentValue);
 
     const modelSelect = document.getElementById('agent-model');
 
@@ -1147,6 +1163,10 @@ class AgentManager {
 
     if (providerType === 'llamacpp') {
       agentData.provider_config.baseURL = this.buildLlamaCppBaseURLFromAgentForm();
+    }
+
+    if (providerType === 'openrouter') {
+      agentData.provider_config.openrouterSort = document.getElementById('agent-openrouter-sort')?.value || '';
     }
 
     if (this._clearHfMetadata) {

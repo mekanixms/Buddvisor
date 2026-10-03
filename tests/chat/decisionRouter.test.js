@@ -18,6 +18,7 @@ const axios = require('axios');
 const DecisionRouter = require('../../src/services/chat/DecisionRouter');
 const OrchestratorAgent = require('../../src/services/chat/OrchestratorAgent');
 const ProviderFactory = require('../../src/providers/ProviderFactory');
+const OpenRouterProvider = require('../../src/providers/OpenRouterProvider');
 
 const ORCH_TOOLS = ['manage_agent_documents', 'manage_agent_tools', 'send_to_telegram'];
 
@@ -279,6 +280,164 @@ describe('DecisionRouter', () => {
       }),
     });
     await expect(DecisionRouter.route(routeArgs())).resolves.toBeNull();
+  });
+
+  it('calls OpenRouter chat completions and maps the JSON choice', async () => {
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    const previousBase = process.env.OPENROUTER_BASE_URL;
+    delete process.env.OPENROUTER_BASE_URL;
+    process.env.OPENROUTER_API_KEY = 'or-env-key';
+    const chat = jest.spyOn(OpenRouterProvider.prototype, 'chat').mockResolvedValue({
+      content: '```json\n{"choice":"agent_3","confidence":0.5,"probabilities":{"agent_2":0.2,"agent_3":0.7,"direct":0.1},"needs_another":0.1}\n```',
+      usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+    });
+
+    try {
+      const decision = await DecisionRouter.route(routeArgs({
+        session: session({
+          decision_model_provider: 'openrouter',
+          decision_model_config: { model: 'openai/gpt-4o-mini', openrouterSort: 'price' },
+        }),
+      }));
+
+      expect(decision.type).toBe('single');
+      expect(decision.agent.id).toBe(3);
+      expect(decision.usage).toEqual({ inputTokens: 12, outputTokens: 8, tokensUsed: 20 });
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(chat).toHaveBeenCalledTimes(1);
+      const provider = chat.mock.instances[0];
+      expect(provider.model).toBe('openai/gpt-4o-mini');
+      expect(provider.apiKey).toBe('or-env-key');
+      expect(provider.openrouterSort).toBe('price');
+      expect(provider.client.baseURL).toBe('https://openrouter.ai/api/v1');
+      const prompt = chat.mock.calls[0][0].map((message) => message.content).join('\n');
+      expect(prompt).toContain('web_search');
+      expect(prompt).toContain('agent_3');
+      expect(prompt).not.toContain('SECRET_CHUNK_TEXT');
+    } finally {
+      chat.mockRestore();
+      if (previousKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousKey;
+      if (previousBase === undefined) delete process.env.OPENROUTER_BASE_URL;
+      else process.env.OPENROUTER_BASE_URL = previousBase;
+    }
+  });
+
+  it('posts a Jev id on OpenRouter to the decisions endpoint', async () => {
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    const previousBase = process.env.OPENROUTER_BASE_URL;
+    process.env.OPENROUTER_API_KEY = 'or-env-key';
+    process.env.OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+    const chat = jest.spyOn(OpenRouterProvider.prototype, 'chat');
+    axios.post.mockResolvedValue({
+      data: answerBody({
+        type: 'choice',
+        choice: 'agent_2',
+        probabilities: { agent_2: 0.8, agent_3: 0.1, direct: 0.1 },
+        confidence: 0.6,
+      }),
+    });
+
+    try {
+      const decision = await DecisionRouter.route(routeArgs({
+        session: session({
+          decision_model_provider: 'openrouter',
+          decision_model_config: { model: 'typesafe/jev-1.13', openrouterSort: 'price' },
+        }),
+      }));
+
+      expect(decision.type).toBe('single');
+      expect(decision.agent.id).toBe(2);
+      expect(chat).not.toHaveBeenCalled();
+      expect(axios.post).toHaveBeenCalledWith(
+        'https://openrouter.ai/api/alpha/decisions',
+        expect.objectContaining({
+          model: 'typesafe/jev-1.13',
+          state: expect.objectContaining({ request: 'Look up the tax rate' }),
+        }),
+        expect.objectContaining({
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer or-env-key',
+          },
+        })
+      );
+      const body = axios.post.mock.calls[0][1];
+      expect(body.questions.handler.criteria.agent_2).toContain('web_search');
+      expect(JSON.stringify(body)).not.toContain('SECRET_CHUNK_TEXT');
+    } finally {
+      chat.mockRestore();
+      if (previousKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousKey;
+      if (previousBase === undefined) delete process.env.OPENROUTER_BASE_URL;
+      else process.env.OPENROUTER_BASE_URL = previousBase;
+    }
+  });
+
+  it('maps a bare Jev alias on OpenRouter to the decisions model id', async () => {
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    const previousBase = process.env.OPENROUTER_BASE_URL;
+    process.env.OPENROUTER_API_KEY = 'or-env-key';
+    delete process.env.OPENROUTER_BASE_URL;
+    axios.post.mockResolvedValue({
+      data: answerBody({
+        type: 'choice',
+        choice: 'direct',
+        probabilities: { direct: 1, agent_2: 0, agent_3: 0 },
+        confidence: 0.5,
+      }),
+    });
+
+    try {
+      await DecisionRouter.route(routeArgs({
+        session: session({
+          decision_model_provider: 'openrouter',
+          decision_model_config: { model: 'jev-latest' },
+        }),
+      }));
+      expect(axios.post).toHaveBeenCalledWith(
+        'https://openrouter.ai/api/alpha/decisions',
+        expect.objectContaining({ model: '~typesafe/jev-latest' }),
+        expect.any(Object)
+      );
+    } finally {
+      if (previousKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousKey;
+      if (previousBase === undefined) delete process.env.OPENROUTER_BASE_URL;
+      else process.env.OPENROUTER_BASE_URL = previousBase;
+    }
+  });
+
+  it('falls back when OpenRouter has no API key or the choice is not a handler', async () => {
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    const missing = await DecisionRouter.route(routeArgs({
+      session: session({
+        decision_model_provider: 'openrouter',
+        decision_model_config: { model: 'google/gemini-2.5-flash' },
+      }),
+    }));
+    expect(missing).toBeNull();
+    expect(axios.post).not.toHaveBeenCalled();
+
+    process.env.OPENROUTER_API_KEY = 'or-env-key';
+    const chat = jest.spyOn(OpenRouterProvider.prototype, 'chat').mockResolvedValue({
+      content: '{"choice":"nobody"}',
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+    try {
+      const decision = await DecisionRouter.route(routeArgs({
+        session: session({
+          decision_model_provider: 'openrouter',
+          decision_model_config: { model: 'custom/router' },
+        }),
+      }));
+      expect(decision).toBeNull();
+    } finally {
+      chat.mockRestore();
+      if (previousKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousKey;
+    }
   });
 
   it('answers directly when no specialists are assigned', async () => {

@@ -1,5 +1,6 @@
 const Agent = require('../../models/Agent');
 const { ProviderFactory } = require('../../providers');
+const OpenRouterProvider = require('../../providers/OpenRouterProvider');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const { fetchModelCapabilities, normalizeRepoId } = require('../integrations/huggingFaceModelService');
@@ -61,6 +62,7 @@ class AgentService {
     if (cleanConfig.apiKey === 'NO_KEY_SHOULD_BE_PROVIDED') {
       delete cleanConfig.apiKey;
     }
+    AgentService.normalizeOpenRouterSort(cleanConfig);
 
     const validation = ProviderFactory.validateConfig(provider_type, cleanConfig);
     if (!validation.valid) {
@@ -96,6 +98,10 @@ class AgentService {
     if (capabilitiesJson && capabilitiesJson.length > 32768) {
       throw new Error('model_capabilities JSON is too large');
     }
+
+    const catalog = await AgentService.lookupOpenRouterChatModel(provider_type, cleanConfig.model);
+    if (catalog.openrouter_model_id) openRouterId = catalog.openrouter_model_id;
+    if (catalog.model_capabilities) capabilitiesJson = catalog.model_capabilities;
 
     // Create agent
     const agent = await Agent.create({
@@ -247,6 +253,7 @@ class AgentService {
       updateData.provider_type = updates.provider_type.toLowerCase();
     }
 
+    let chatModel = null;
     if (updates.provider_config !== undefined) {
       const providerType = updateData.provider_type || agent.provider_type;
       
@@ -267,12 +274,21 @@ class AgentService {
         // If decryption fails, use new config as-is
         logger.warn('Failed to merge existing config:', error.message);
       }
+
+      AgentService.normalizeOpenRouterSort(mergedConfig);
       
       const validation = ProviderFactory.validateConfig(providerType, mergedConfig);
       if (!validation.valid) {
         throw new Error(`Invalid provider configuration: ${validation.errors.join(', ')}`);
       }
       updateData.provider_config = encrypt(JSON.stringify(mergedConfig));
+      chatModel = mergedConfig.model;
+    } else {
+      try {
+        chatModel = JSON.parse(decrypt(agent.provider_config)).model;
+      } catch (error) {
+        chatModel = null;
+      }
     }
 
     if (updates.is_active !== undefined) {
@@ -315,6 +331,13 @@ class AgentService {
         }
       }
     }
+
+    const catalog = await AgentService.lookupOpenRouterChatModel(
+      updateData.provider_type || agent.provider_type,
+      chatModel
+    );
+    if (catalog.openrouter_model_id) updateData.openrouter_model_id = catalog.openrouter_model_id;
+    if (catalog.model_capabilities) updateData.model_capabilities = catalog.model_capabilities;
 
     // Perform update
     const updatedAgent = await Agent.update(agentId, updateData);
@@ -396,6 +419,7 @@ class AgentService {
         qwen: process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY,
         kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
         llamacpp: process.env.LLAMACPP_API_KEY,
+        openrouter: process.env.OPENROUTER_API_KEY,
       };
 
       if (envKeys[agent.provider_type]) {
@@ -506,6 +530,46 @@ class AgentService {
   }
 
   /**
+   * Drop a blank OpenRouter routing preference. Leave an invalid value for validateConfig.
+   * @param {object} config
+   */
+  static normalizeOpenRouterSort(config) {
+    if (!config || typeof config !== 'object' || config.openrouterSort == null) return;
+    const raw = String(config.openrouterSort).trim().toLowerCase();
+    if (!raw) {
+      delete config.openrouterSort;
+      return;
+    }
+    config.openrouterSort = raw;
+  }
+
+  /**
+   * When the chat provider is OpenRouter, store the model id and refresh catalog capabilities.
+   * A failed catalog lookup does not block the save.
+   * @param {string} providerType
+   * @param {string} model
+   * @returns {Promise<{openrouter_model_id?: string, model_capabilities?: string}>}
+   */
+  static async lookupOpenRouterChatModel(providerType, model) {
+    if (String(providerType || '').toLowerCase() !== 'openrouter') return {};
+    let modelId;
+    try {
+      modelId = normalizeOpenRouterModelId(model);
+    } catch {
+      return {};
+    }
+    const result = { openrouter_model_id: modelId };
+    try {
+      const { capabilities } = await fetchOpenRouterModelCapabilities(modelId);
+      const json = JSON.stringify(capabilities);
+      if (json.length <= 32768) result.model_capabilities = json;
+    } catch (error) {
+      logger.warn(`OpenRouter catalog lookup failed for ${modelId}: ${error.message}`);
+    }
+    return result;
+  }
+
+  /**
    * Sanitize agent for response (remove sensitive data)
    * @param {object} agent - Agent from database
    * @param {object} config - Decrypted config
@@ -521,6 +585,9 @@ class AgentService {
       enablePromptCache: !!config.enablePromptCache,
       hasApiKey: !!config.apiKey,
     };
+    if (config.openrouterSort) {
+      safeConfig.openrouterSort = config.openrouterSort;
+    }
     
     // Include baseURL for Ollama (it's not sensitive)
     if (config.baseURL) {

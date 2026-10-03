@@ -8,6 +8,7 @@ const Message = require('../../models/Message');
 const ConversationRound = require('../../models/ConversationRound');
 const AgentService = require('../agents/AgentService');
 const ProviderFactory = require('../../providers/ProviderFactory');
+const OpenRouterProvider = require('../../providers/OpenRouterProvider');
 const OrchestratorAgent = require('./OrchestratorAgent');
 const { toolRegistry } = require('../tools/ToolRegistry');
 const { syncAssignedDocumentsToWorkspace } = require('../tools/localWorkingFolderTool');
@@ -563,6 +564,17 @@ Guidelines:
       providerConfig.baseURL = baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
     } else if (providerType === 'llamacpp') {
       providerConfig.baseURL = baseURL || process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1';
+    } else if (providerType === 'openrouter') {
+      let source = session.orchestrator_provider_config;
+      if (typeof source === 'string') {
+        try {
+          source = JSON.parse(decrypt(source));
+        } catch (e) {
+          source = null;
+        }
+      }
+      Object.assign(providerConfig, OpenRouterProvider.runtimeFields(source));
+      if (!providerConfig.baseURL && baseURL) providerConfig.baseURL = baseURL;
     }
 
     return ProviderFactory.create(providerType, providerConfig);
@@ -582,6 +594,7 @@ Guidelines:
       kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
       ollama: 'not-required',
       llamacpp: process.env.LLAMACPP_API_KEY || 'not-required',
+      openrouter: process.env.OPENROUTER_API_KEY,
     };
     return envKeys[providerType];
   }
@@ -597,6 +610,7 @@ Guidelines:
       xai: 'grok-beta',
       ollama: 'llama3.1',
       llamacpp: 'local',
+      openrouter: 'google/gemini-2.5-flash',
     };
     return defaultModels[providerType];
   }

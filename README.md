@@ -41,7 +41,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Multi-Agent System**: User-defined specialized agents (legal, accounting, marketing, sales, etc.)
 - **Adaptive Orchestration**: Intelligent task routing with sequential or parallel execution
 - **Two Orchestration Modes**: Classic router (agents keep their own history) or orchestrator-led delegation (orchestrator briefs agents, saving tokens)
-- **Decision-model router**: In Router mode, Nimble (local Ollama) or Jev (remote) can pick the handler. The orchestrator model still writes the answer when the route stays with the orchestrator
+- **Decision-model router**: In Router mode, Nimble (local Ollama), Jev (remote), or an OpenRouter chat model can pick the handler. The orchestrator model still writes the answer when the route stays with the orchestrator
 - **Document Management**: Upload and manage documents with local embeddings (Transformers.js + FAISS)
 - **Chat & Task Modes**: Casual conversation or formal task submission
 - **Web search**: Brave Search via `web_search` (`BRAVE_SEARCH_API_KEY`)
@@ -60,7 +60,7 @@ Then go to **Chat** and start. “AI Brainstorming” (conversation mode) is off
 - **Orchestrator admin tools**: `manage_agent_documents` and `manage_agent_tools` do what Configure Session → Documents and Tools do, from chat
 - **Archived Conversation History Tool**: Read and export conversation history with filtering, chunking, and export capabilities via `archived_conversation_history`
 - **Interactive HTML/JS Artifacts**: Agents can create visualizations, charts, and interactive content rendered in iframes
-- **Multiple LLM Providers**: Claude, OpenAI, Gemini, xAI, DeepSeek, Qwen, Kimi, and a running llama.cpp server, plus Ollama locally
+- **Multiple LLM Providers**: Claude, OpenAI, Gemini, xAI, DeepSeek, Qwen, Kimi, OpenRouter, and a running llama.cpp server, plus Ollama locally
 - **Multi-User Support**: Basic authentication with user isolation
 - **Superuser Management**: Admin user management with password reset and user deletion capabilities
 
@@ -391,10 +391,11 @@ Notes for orchestrator-led mode:
 
 ### Decision model (Router mode)
 
-In **Configure Session → Orchestrator**, while Orchestration Mode is **Router**, turn on **Use a decision model for routing**. Nimble or Jev then chooses the handler. They do not write the user-facing answer.
+In **Configure Session → Orchestrator**, while Orchestration Mode is **Router**, turn on **Use a decision model for routing**. Nimble, Jev, or an OpenRouter chat model then chooses the handler. They do not write the user-facing answer.
 
 - **Local (Ollama)** calls `POST /v1/systemone` on the host and port saved for the decision model (Ollama 0.35 or later). The model id is `nimble`.
 - **Remote (Jev)** uses the same request at `TYPESAFE_BASE_URL` (default `https://api.typesafe.ai`) with model `jev-latest`. Leave the API key blank to use `TYPESAFE_API_KEY`.
+- **OpenRouter** chat models call `POST /v1/chat/completions` and are asked for the same handler choice as JSON. Model ids are `author/slug`. A Jev id (`typesafe/jev-1.13`, `~typesafe/jev-latest`, or `jev-latest`) is sent as the same System One body to `POST /api/alpha/decisions` instead. Leave the API key blank to use `OPENROUTER_API_KEY`. Price and throughput routing apply only to chat models.
 
 Each specialist is one choice. The choice text includes that agent's role and assigned tool names, not full tool schemas. `direct` is the orchestrator, including its own tools (document assignment, tool assignment, Telegram sends). A second specialist is added only when the model says another one is needed and a runner-up is strong enough. When the choice is `direct`, the orchestrator model configured above still writes the reply.
 
@@ -411,6 +412,7 @@ Each agent can use a different LLM provider. Configure when creating an agent:
 - **Qwen**: Requires `DASHSCOPE_API_KEY` or `QWEN_API_KEY`
 - **xAI**: Requires `XAI_API_KEY`
 - **Kimi**: Requires `KIMI_API_KEY` or `MOONSHOT_API_KEY` (`KIMI_BASE_URL`, default `https://api.moonshot.ai/v1`)
+- **OpenRouter**: Requires `OPENROUTER_API_KEY`, or a key on the agent or session. One OpenAI-compatible endpoint (`OPENROUTER_BASE_URL`, default `https://openrouter.ai/api/v1`) serves many models. Model ids are `author/slug` (for example `google/gemini-2.5-flash`); use Custom… for any other id. Routing can be left at OpenRouter’s default, or set to lowest price or highest throughput. Optional attribution: `OPENROUTER_HTTP_REFERER` and `OPENROUTER_APP_NAME` (default `Badvisor`).
 - **llama.cpp**: A running `llama-server`. In the agent or orchestrator form, choose provider `llamacpp` and set host and port (default `localhost:8080`). The app stores that as a `baseURL` ending in `/v1` and calls `POST /v1/chat/completions`. One process usually serves one GGUF; the model field is the `-a` alias, or the id from `GET /v1/models` when the server is in router mode. Tool calls work when that server was started with `--jinja` and a tool-capable chat template. Optional API key, or `LLAMACPP_API_KEY`. Optional default URL: `LLAMACPP_BASE_URL`.
 - **Ollama** (Local): Requires Ollama running locally. To use an Ollama server on another machine (e.g. on your LAN):
   - **Option A (all sessions):** set `OLLAMA_BASE_URL=http://<host>:11434` in `.env` (e.g. `http://192.168.1.10:11434`).

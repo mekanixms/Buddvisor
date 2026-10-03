@@ -105,7 +105,7 @@ router.post('/', (req, res, next) => {
     .withMessage('Context length must be between 1 and 200'),
   body('orchestrator_provider_type')
     .optional()
-    .isIn(['claude', 'openai', 'gemini', 'xai', 'deepseek', 'qwen', 'kimi', 'granite', 'ollama', 'llamacpp'])
+    .isIn(['claude', 'openai', 'gemini', 'xai', 'deepseek', 'qwen', 'kimi', 'granite', 'ollama', 'llamacpp', 'openrouter'])
     .withMessage('Invalid provider type'),
   body('orchestrator_provider_config')
     .optional()
@@ -316,7 +316,7 @@ router.put('/:id', [
     .withMessage('Context length must be between 1 and 200'),
   body('orchestrator_provider_type')
     .optional()
-    .isIn(['claude', 'openai', 'gemini', 'xai', 'deepseek', 'qwen', 'kimi', 'granite', 'ollama', 'llamacpp'])
+    .isIn(['claude', 'openai', 'gemini', 'xai', 'deepseek', 'qwen', 'kimi', 'granite', 'ollama', 'llamacpp', 'openrouter'])
     .withMessage('Invalid provider type'),
   body('orchestrator_provider_config')
     .optional()
@@ -348,8 +348,8 @@ router.put('/:id', [
       .withMessage('decision_model_enabled must be 0 or 1'),
     body('decision_model_provider')
       .optional({ nullable: true })
-      .isIn(['ollama', 'jev'])
-      .withMessage('decision_model_provider must be "ollama" or "jev"'),
+      .isIn(['ollama', 'jev', 'openrouter'])
+      .withMessage('decision_model_provider must be "ollama", "jev", or "openrouter"'),
     body('decision_model_config')
       .optional({ nullable: true })
       .isObject()

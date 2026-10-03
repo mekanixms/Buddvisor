@@ -8,6 +8,7 @@ const DeepSeekProvider = require('./DeepSeekProvider');
 const QwenProvider = require('./QwenProvider');
 const KimiProvider = require('./KimiProvider');
 const LlamaCppProvider = require('./LlamaCppProvider');
+const OpenRouterProvider = require('./OpenRouterProvider');
 const ProviderFactory = require('./ProviderFactory');
 
 module.exports = {
@@ -21,5 +22,6 @@ module.exports = {
   QwenProvider,
   KimiProvider,
   LlamaCppProvider,
+  OpenRouterProvider,
   ProviderFactory,
 };

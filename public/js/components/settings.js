@@ -191,6 +191,7 @@ class Settings {
                       <option value="gemini" ${this.settings.defaultProvider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
                       <option value="xai" ${this.settings.defaultProvider === 'xai' ? 'selected' : ''}>xAI (Grok)</option>
                       <option value="ollama" ${this.settings.defaultProvider === 'ollama' ? 'selected' : ''}>Ollama (Local)</option>
+                      <option value="openrouter" ${this.settings.defaultProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
                     </select>
                     <div class="form-text">Provider used for new agents and sessions</div>
                   </div>
@@ -274,6 +275,18 @@ class Settings {
                       </button>
                     </div>
                     <div class="form-text">Set XAI_API_KEY in .env</div>
+                  </div>
+
+                  <div class="mb-3">
+                    <label class="form-label"><i class="bi bi-signpost-split me-1"></i>OpenRouter</label>
+                    <div class="input-group">
+                      <input type="password" class="form-control" id="provider-openrouter-key"
+                             placeholder="sk-or-..." disabled>
+                      <button class="btn btn-outline-secondary" type="button" disabled>
+                        <i class="bi bi-check"></i> Test
+                      </button>
+                    </div>
+                    <div class="form-text">Set OPENROUTER_API_KEY in .env</div>
                   </div>
 
                   <div class="mb-3">

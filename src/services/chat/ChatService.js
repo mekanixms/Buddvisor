@@ -12,6 +12,7 @@ const OrchestratorAgent = require('./OrchestratorAgent');
 const Document = require('../../models/Document');
 const { toolExecutor } = require('../tools/ToolExecutor');
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
+const OpenRouterProvider = require('../../providers/OpenRouterProvider');
 const logger = require('../../utils/logger');
 const { expandPromptMacros } = require('../../utils/promptMacros');
 const { usageFromResponse, tokenRow } = require('./tokenUsage');
@@ -614,6 +615,9 @@ class ChatService {
         || process.env.LLAMACPP_BASE_URL
         || 'http://localhost:8080/v1';
     }
+    if (providerType === 'openrouter') {
+      Object.assign(providerConfig, OpenRouterProvider.runtimeFields(parsedOrchestratorConfig));
+    }
 
     const provider = ProviderFactory.create(providerType, providerConfig);
 
@@ -683,6 +687,7 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
       ollama: 'not-required', // Ollama doesn't need an API key
       llamacpp: process.env.LLAMACPP_API_KEY || 'not-required',
+      openrouter: process.env.OPENROUTER_API_KEY,
     };
     return envKeys[providerType];
   }
@@ -698,6 +703,7 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       xai: 'grok-beta',
       ollama: 'llama3.1',
       llamacpp: 'local',
+      openrouter: 'google/gemini-2.5-flash',
     };
     return defaultModels[providerType];
   }
@@ -902,6 +908,7 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
         ...(cfg.maxTokens ? { maxTokens: cfg.maxTokens } : {}),
         ...(cfg.temperature != null ? { temperature: cfg.temperature } : {}),
         ...(llamaCppBaseURL ? { baseURL: llamaCppBaseURL } : {}),
+        ...(providerType === 'openrouter' ? OpenRouterProvider.runtimeFields(cfg) : {}),
       });
     }
 

@@ -519,8 +519,8 @@ class SessionService {
       if (updates.decision_model_provider !== undefined) {
         if (updates.decision_model_provider === null || updates.decision_model_provider === '') {
           allowedUpdates.decision_model_provider = null;
-        } else if (!['ollama', 'jev'].includes(updates.decision_model_provider)) {
-          throw new Error('Decision model provider must be "ollama" or "jev"');
+        } else if (!['ollama', 'jev', 'openrouter'].includes(updates.decision_model_provider)) {
+          throw new Error('Decision model provider must be "ollama", "jev", or "openrouter"');
         } else {
           allowedUpdates.decision_model_provider = updates.decision_model_provider;
         }
@@ -984,7 +984,7 @@ class SessionService {
       if (importData.session.decision_model_enabled !== undefined) {
         decisionUpdates.decision_model_enabled = importData.session.decision_model_enabled ? 1 : 0;
       }
-      if (['ollama', 'jev'].includes(importData.session.decision_model_provider)) {
+      if (['ollama', 'jev', 'openrouter'].includes(importData.session.decision_model_provider)) {
         decisionUpdates.decision_model_provider = importData.session.decision_model_provider;
       }
       if (importData.session.decision_model_config && typeof importData.session.decision_model_config === 'object') {
