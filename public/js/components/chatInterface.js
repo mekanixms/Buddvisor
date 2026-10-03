@@ -281,7 +281,7 @@ class ChatInterface {
     // If last message is a user message, it might be waiting for a response
     if (lastMessage.role === 'user') {
       // Check if it's very recent (within last 60 seconds) - likely still processing
-      const messageTime = new Date(lastMessage.created_at).getTime();
+      const messageTime = (parseAppDate(lastMessage.created_at) || new Date(0)).getTime();
       const now = Date.now();
       const timeDiff = now - messageTime;
 
@@ -292,7 +292,7 @@ class ChatInterface {
 
     // If last message is assistant but very short or empty, might still be streaming
     if (lastMessage.role === 'assistant') {
-      const messageTime = new Date(lastMessage.created_at).getTime();
+      const messageTime = (parseAppDate(lastMessage.created_at) || new Date(0)).getTime();
       const now = Date.now();
       const timeDiff = now - messageTime;
 
@@ -1597,11 +1597,25 @@ class ChatInterface {
    * @param {boolean} isArchived - Whether this message is left out of agent context
    * @param {boolean} inActiveWindow - Whether this message is inside the context-length window
    */
+  messageClock(createdAt) {
+    if (!createdAt || typeof formatAppTime !== 'function') return { text: '', title: '' };
+    const text = formatAppTime(createdAt, { hour: '2-digit', minute: '2-digit' });
+    const full = formatAppDateTime(createdAt, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const zone = typeof appTimezoneLabel === 'function' ? appTimezoneLabel() : '';
+    return { text, title: zone ? `${full} (${zone})` : full };
+  }
+
   renderMessage(message, isArchived = false, inActiveWindow = false) {
     const isUser = message.role === 'user';
-    const timestamp = message.created_at
-      ? new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : '';
+    const clock = this.messageClock(message.created_at);
+    const timestamp = clock.text;
+    const timestampTitle = escapeHtml(clock.title);
 
     // Check if this is a task-related message
     const isTaskMessage = !isUser && (
@@ -1716,7 +1730,7 @@ class ChatInterface {
                   ${this.renderSummarizeButton(message, false)}
                   ${this.renderArchiveButton(message, inActiveWindow)}
                   ${deleteBtn}
-                  <small class="opacity-75">${timestamp}</small>
+                  <small class="opacity-75" title="${timestampTitle}">${timestamp}</small>
                 </div>
               </div>
             </div>
@@ -1783,7 +1797,7 @@ class ChatInterface {
                 ${this.renderSummarizeButton(message, true)}
                 ${this.renderArchiveButton(message, inActiveWindow)}
                 ${deleteBtn}
-                <small class="text-muted">${timestamp}</small>
+                <small class="text-muted" title="${timestampTitle}">${timestamp}</small>
               </div>
             </div>
             <div class="message-content">
@@ -2522,7 +2536,7 @@ class ChatInterface {
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 100, 100);
-      const exportDate = new Date().toLocaleString('en-US', {
+      const exportDate = formatAppDateTime(new Date(), {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
@@ -2551,7 +2565,7 @@ class ChatInterface {
 
         const isUser = message.role === 'user';
         const timestamp = message.created_at
-          ? new Date(message.created_at).toLocaleString('en-US', {
+          ? formatAppDateTime(message.created_at, {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -2818,7 +2832,7 @@ class ChatInterface {
       // Ensure we don't include any scripts in the export.
       clone.querySelectorAll('script').forEach((el) => el.remove());
 
-      const exportDate = new Date().toLocaleString('en-US', {
+      const exportDate = formatAppDateTime(new Date(), {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
@@ -3424,8 +3438,8 @@ img { max-width: 100%; height: auto; }
 
     // Sort by creation time (newest first)
     bookmarkedMessages.sort((a, b) => {
-      const timeA = new Date(a.created_at || 0).getTime();
-      const timeB = new Date(b.created_at || 0).getTime();
+      const timeA = (parseAppDate(a.created_at) || new Date(0)).getTime();
+      const timeB = (parseAppDate(b.created_at) || new Date(0)).getTime();
       return timeB - timeA;
     });
 
@@ -3439,7 +3453,7 @@ img { max-width: 100%; height: auto; }
     const bookmarkItemsHtml = bookmarkedMessages.map(msg => {
       const isUser = msg.role === 'user';
       const timestamp = msg.created_at
-        ? new Date(msg.created_at).toLocaleString('en-US', {
+        ? formatAppDateTime(msg.created_at, {
           year: 'numeric',
           month: 'short',
           day: 'numeric',

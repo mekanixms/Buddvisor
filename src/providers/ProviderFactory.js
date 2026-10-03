@@ -6,6 +6,7 @@ const XAIProvider = require('./XAIProvider');
 const DeepSeekProvider = require('./DeepSeekProvider');
 const QwenProvider = require('./QwenProvider');
 const KimiProvider = require('./KimiProvider');
+const LlamaCppProvider = require('./LlamaCppProvider');
 const logger = require('../utils/logger');
 
 /**
@@ -25,7 +26,17 @@ class ProviderFactory {
     deepseek: DeepSeekProvider,
     qwen: QwenProvider,
     kimi: KimiProvider,
+    llamacpp: LlamaCppProvider,
   };
+
+  /**
+   * Local servers that do not require an API key.
+   * @param {string} type
+   * @returns {boolean}
+   */
+  static isLocalProvider(type) {
+    return type === 'ollama' || type === 'llamacpp';
+  }
 
   /**
    * Create a provider instance
@@ -91,9 +102,9 @@ class ProviderFactory {
         return null;
       }
 
-      // Create a temporary instance to get model info
-      // For Ollama, we don't need an API key
-      const config = normalizedType === 'ollama'
+      // Create a temporary instance to get model info.
+      // Local servers (Ollama, llama.cpp) do not need an API key.
+      const config = this.isLocalProvider(normalizedType)
         ? {}
         : { apiKey: 'temp' }; // Temporary key just to get models
 
@@ -103,27 +114,31 @@ class ProviderFactory {
           type: normalizedType,
           defaultModel: tempProvider.getDefaultModel(),
           availableModels: tempProvider.getAvailableModels(),
-          requiresApiKey: normalizedType !== 'ollama',
+          requiresApiKey: !this.isLocalProvider(normalizedType),
         };
-        
-        // Add default Ollama base URL if Ollama provider
+
         if (normalizedType === 'ollama') {
           providerInfo.defaultOllamaBaseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
         }
-        
+        if (normalizedType === 'llamacpp') {
+          providerInfo.defaultLlamaCppBaseURL = process.env.LLAMACPP_BASE_URL || LlamaCppProvider.DEFAULT_BASE_URL;
+        }
+
         return providerInfo;
       } catch (error) {
         // If we can't create a temp provider, return basic info
         const basicInfo = {
           type: normalizedType,
-          requiresApiKey: normalizedType !== 'ollama',
+          requiresApiKey: !this.isLocalProvider(normalizedType),
         };
-        
-        // Add default Ollama base URL if Ollama provider
+
         if (normalizedType === 'ollama') {
           basicInfo.defaultOllamaBaseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
         }
-        
+        if (normalizedType === 'llamacpp') {
+          basicInfo.defaultLlamaCppBaseURL = process.env.LLAMACPP_BASE_URL || LlamaCppProvider.DEFAULT_BASE_URL;
+        }
+
         return basicInfo;
       }
     }
@@ -159,8 +174,8 @@ class ProviderFactory {
       return { valid: false, errors };
     }
 
-    // Ollama doesn't require API key
-    if (normalizedType !== 'ollama') {
+    // Ollama and llama.cpp do not require an API key (llama.cpp key is optional).
+    if (!this.isLocalProvider(normalizedType)) {
       // Allow empty API key or placeholder (can be added later or use env vars)
       // Check for placeholder value used in exports
       if (config.apiKey === 'NO_KEY_SHOULD_BE_PROVIDED') {

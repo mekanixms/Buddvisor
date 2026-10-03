@@ -294,8 +294,7 @@ class AgentManager {
                     <select class="form-select" id="agent-provider" required data-action="provider-change">
                       ${this.providers.map(provider => `
                         <option value="${provider.type}" ${agent?.provider_type === provider.type ? 'selected' : ''}>
-                          ${provider.type.charAt(0).toUpperCase() + provider.type.slice(1)}
-                          ${provider.requiresApiKey ? '' : '(Local)'}
+                          ${this.providerOptionLabel(provider)}
                         </option>
                       `).join('')}
                     </select>
@@ -312,7 +311,7 @@ class AgentManager {
                 </div>
 
                 <div class="mb-3" id="api-key-group">
-                  <label class="form-label">API Key ${isEdit ? '' : '*'}</label>
+                  <label class="form-label" id="api-key-label">API Key ${isEdit ? '' : '*'}</label>
                   <div class="input-group">
                     <input type="password" class="form-control" id="agent-api-key"
                            placeholder="${isEdit ? 'Leave blank to keep existing key' : 'Enter API key'}">
@@ -321,6 +320,7 @@ class AgentManager {
                     </button>
                   </div>
                   ${isEdit && agent?.provider_config?.hasApiKey ? '<div class="form-text text-success"><i class="bi bi-check-circle"></i> API key is currently configured</div>' : ''}
+                  <div class="form-text d-none" id="api-key-optional-hint">Optional. Leave blank if llama-server was started without --api-key.</div>
                 </div>
 
                 <!-- Ollama Configuration (only visible when Ollama is selected) -->
@@ -336,6 +336,21 @@ class AgentManager {
                     <input type="number" class="form-control" id="agent-ollama-port" 
                            placeholder="11434" min="1" max="65535" value="${this.getOllamaPort(agent?.provider_config)}">
                     <div class="form-text">Ollama server port (default from .env)</div>
+                  </div>
+                </div>
+
+                <div id="agent-llamacpp-config" class="row mb-3 d-none">
+                  <div class="col-md-6">
+                    <label class="form-label">llama.cpp Address</label>
+                    <input type="text" class="form-control" id="agent-llamacpp-address"
+                           placeholder="localhost" value="${this.getLlamaCppAddress(agent?.provider_type === 'llamacpp' ? agent?.provider_config : null)}">
+                    <div class="form-text">llama-server host (default localhost)</div>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">llama.cpp Port</label>
+                    <input type="number" class="form-control" id="agent-llamacpp-port"
+                           placeholder="8080" min="1" max="65535" value="${this.getLlamaCppPort(agent?.provider_type === 'llamacpp' ? agent?.provider_config : null)}">
+                    <div class="form-text">llama-server port (default 8080). Start the server with --jinja if this agent uses tools.</div>
                   </div>
                 </div>
 
@@ -804,13 +819,21 @@ class AgentManager {
       modelSelect.innerHTML = this.getModelOptions(providerType);
     }
 
-    // Show/hide API key based on provider
-    if (provider && !provider.requiresApiKey) {
-      apiKeyGroup.style.display = 'none';
-    } else {
-      apiKeyGroup.style.display = 'block';
+    // llama.cpp shows the key field but does not require one.
+    const showApiKey = providerType === 'llamacpp' || !provider || provider.requiresApiKey;
+    if (apiKeyGroup) {
+      apiKeyGroup.style.display = showApiKey ? 'block' : 'none';
     }
-    
+    const apiKeyLabel = document.getElementById('api-key-label');
+    const apiKeyHint = document.getElementById('api-key-optional-hint');
+    const isEdit = !!document.getElementById('agent-id')?.value;
+    if (apiKeyLabel) {
+      apiKeyLabel.textContent = (!isEdit && showApiKey && providerType !== 'llamacpp') ? 'API Key *' : 'API Key';
+    }
+    if (apiKeyHint) {
+      apiKeyHint.classList.toggle('d-none', providerType !== 'llamacpp');
+    }
+
     // Show/hide Ollama config fields
     const ollamaConfig = document.getElementById('agent-ollama-config');
     if (ollamaConfig) {
@@ -819,6 +842,11 @@ class AgentManager {
       } else {
         ollamaConfig.classList.add('d-none');
       }
+    }
+
+    const llamaCppConfig = document.getElementById('agent-llamacpp-config');
+    if (llamaCppConfig) {
+      llamaCppConfig.classList.toggle('d-none', providerType !== 'llamacpp');
     }
 
     this.refreshCapabilitiesAlert();
@@ -876,6 +904,67 @@ class AgentManager {
     }
     
     return '11434';
+  }
+
+  /**
+   * Display name for a provider option.
+   */
+  providerOptionLabel(provider) {
+    const name = provider.type === 'llamacpp'
+      ? 'llama.cpp'
+      : provider.type.charAt(0).toUpperCase() + provider.type.slice(1);
+    return `${name}${provider.requiresApiKey ? '' : ' (Local)'}`;
+  }
+
+  /**
+   * Default llama.cpp host from provider info or localhost.
+   */
+  llamaCppDefaultParts() {
+    const llamaProvider = this.providers.find(p => p.type === 'llamacpp');
+    const defaultURL = llamaProvider?.defaultLlamaCppBaseURL || 'http://localhost:8080/v1';
+    try {
+      const url = new URL(defaultURL);
+      return { host: url.hostname || 'localhost', port: url.port || '8080' };
+    } catch {
+      return { host: 'localhost', port: '8080' };
+    }
+  }
+
+  /**
+   * llama.cpp address from a llamacpp config, otherwise the default host.
+   */
+  getLlamaCppAddress(config) {
+    if (config?.baseURL) {
+      try {
+        return new URL(config.baseURL).hostname || 'localhost';
+      } catch {
+        return 'localhost';
+      }
+    }
+    return this.llamaCppDefaultParts().host;
+  }
+
+  /**
+   * llama.cpp port from a llamacpp config, otherwise 8080.
+   */
+  getLlamaCppPort(config) {
+    if (config?.baseURL) {
+      try {
+        return new URL(config.baseURL).port || '8080';
+      } catch {
+        return '8080';
+      }
+    }
+    return this.llamaCppDefaultParts().port;
+  }
+
+  /**
+   * Build http://host:port/v1 from the agent llama.cpp fields.
+   */
+  buildLlamaCppBaseURLFromAgentForm() {
+    const address = document.getElementById('agent-llamacpp-address')?.value?.trim() || 'localhost';
+    const port = document.getElementById('agent-llamacpp-port')?.value?.trim() || '8080';
+    return `http://${address}:${port}/v1`;
   }
 
   /**
@@ -982,6 +1071,9 @@ class AgentManager {
         apiKey: apiKey || 'local',
         model: document.getElementById('agent-model').value,
       };
+      if (providerType === 'llamacpp') {
+        config.baseURL = this.buildLlamaCppBaseURLFromAgentForm();
+      }
 
       const response = await api.agents.testProvider(providerType, config);
 
@@ -1051,6 +1143,10 @@ class AgentManager {
       const finalAddress = ollamaAddress || 'localhost';
       const finalPort = ollamaPort || '11434';
       agentData.provider_config.baseURL = `http://${finalAddress}:${finalPort}`;
+    }
+
+    if (providerType === 'llamacpp') {
+      agentData.provider_config.baseURL = this.buildLlamaCppBaseURLFromAgentForm();
     }
 
     if (this._clearHfMetadata) {

@@ -7,6 +7,7 @@ const XAIProvider = require('./XAIProvider');
 const DeepSeekProvider = require('./DeepSeekProvider');
 const QwenProvider = require('./QwenProvider');
 const KimiProvider = require('./KimiProvider');
+const LlamaCppProvider = require('./LlamaCppProvider');
 const ProviderFactory = require('./ProviderFactory');
 
 module.exports = {
@@ -19,5 +20,6 @@ module.exports = {
   DeepSeekProvider,
   QwenProvider,
   KimiProvider,
+  LlamaCppProvider,
   ProviderFactory,
 };

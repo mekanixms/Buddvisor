@@ -217,7 +217,7 @@ class DocumentManager {
             <dd class="col-sm-8">${doc.file_type}</dd>
 
             <dt class="col-sm-4">Uploaded</dt>
-            <dd class="col-sm-8">${new Date(doc.uploaded_at).toLocaleString()}</dd>
+            <dd class="col-sm-8">${formatAppDateTime(doc.uploaded_at) || '—'}</dd>
 
             <dt class="col-sm-4">Chunks</dt>
             <dd class="col-sm-8">

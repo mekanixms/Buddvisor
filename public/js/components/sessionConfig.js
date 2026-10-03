@@ -125,6 +125,10 @@ class SessionConfig {
     }
 
     const currentOrchestratorModel = this.currentOrchestratorModel;
+    const decisionProvider = this.currentSession.decision_model_provider === 'jev' ? 'jev' : 'ollama';
+    const decisionConfig = this.currentSession.decision_model_config || {};
+    const decisionModel = decisionConfig.model || (decisionProvider === 'jev' ? 'jev-latest' : 'nimble');
+    const routerMode = (this.currentSession.orchestration_mode || 'route') === 'route';
 
     // Get all available agents
     const availableAgents = window.agentManager?.getAgents() || [];
@@ -273,7 +277,7 @@ class SessionConfig {
                     </div>
                     <div class="mb-3">
                       <label class="form-label">Orchestration Mode</label>
-                      <select class="form-select" id="config-orchestration-mode">
+                      <select class="form-select" id="config-orchestration-mode" data-action="orchestration-mode-change">
                         <option value="route" ${(this.currentSession.orchestration_mode || 'route') === 'route' ? 'selected' : ''}>Router (classic) — orchestrator routes to agents, agents see their own history</option>
                         <option value="orchestrator_led" ${this.currentSession.orchestration_mode === 'orchestrator_led' ? 'selected' : ''}>Orchestrator-led (delegation) — orchestrator leads and sends self-contained briefs to agents</option>
                       </select>
@@ -723,8 +727,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                         <select class="form-select" id="config-orchestrator-provider" data-action="orchestrator-provider-change">
                           ${this.providers.map(provider => `
                             <option value="${provider.type}" ${this.currentSession.orchestrator_provider_type === provider.type ? 'selected' : ''}>
-                              ${provider.type.charAt(0).toUpperCase() + provider.type.slice(1)}
-                              ${provider.requiresApiKey ? '' : '(Local)'}
+                              ${this.providerOptionLabel(provider)}
                             </option>
                           `).join('')}
                         </select>
@@ -763,6 +766,21 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                       </div>
                     </div>
 
+                    <div id="orchestrator-llamacpp-config" class="row mb-3 d-none">
+                      <div class="col-md-6">
+                        <label class="form-label">llama.cpp Address</label>
+                        <input type="text" class="form-control" id="config-llamacpp-address"
+                               placeholder="localhost" value="${this.getLlamaCppAddress(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.currentSession.orchestrator_provider_config : null)}">
+                        <div class="form-text">llama-server host (default localhost)</div>
+                      </div>
+                      <div class="col-md-6">
+                        <label class="form-label">llama.cpp Port</label>
+                        <input type="number" class="form-control" id="config-llamacpp-port"
+                               placeholder="8080" min="1" max="65535" value="${this.getLlamaCppPort(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.currentSession.orchestrator_provider_config : null)}">
+                        <div class="form-text">llama-server port (default 8080). Start the server with --jinja so tool calls work.</div>
+                      </div>
+                    </div>
+
                     <!-- API Key Configuration (only visible when provider requires API key) -->
                     <div id="orchestrator-api-key-config" class="row mb-3 ${this.currentSession.orchestrator_provider_type === 'ollama' ? 'd-none' : ''}">
                       <div class="col-md-12">
@@ -770,7 +788,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                         <input type="password" class="form-control" id="config-orchestrator-api-key"
                                placeholder="Leave empty to use .env value"
                                value="${this.getOrchestratorApiKey(this.currentSession.orchestrator_provider_config)}">
-                        <div class="form-text">API key for the orchestrator provider. Leave empty to use the value from environment variables (.env).</div>
+                        <div class="form-text" id="orchestrator-api-key-hint">API key for the orchestrator provider. Leave empty to use the value from environment variables (.env).</div>
                       </div>
                     </div>
 
@@ -793,6 +811,62 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                         </label>
                       </div>
                       <div class="form-text text-muted">Reduces cost per million tokens when the model caches repeated context. Disable if you see API errors.</div>
+                    </div>
+
+                    <div id="decision-model-section" class="${routerMode ? '' : 'd-none'}">
+                      <hr>
+                      <h6 class="mb-3">Decision model</h6>
+                      <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="config-decision-model-enabled"
+                               data-action="decision-model-toggle"
+                               ${this.currentSession.decision_model_enabled ? 'checked' : ''}>
+                        <label class="form-check-label" for="config-decision-model-enabled">
+                          Use a decision model for routing
+                        </label>
+                      </div>
+                      <div class="form-text mb-3">
+                        Nimble (local) or Jev (remote) chooses the agent. The orchestrator model above still writes the answer when the route stays with the orchestrator.
+                      </div>
+                      <div id="decision-model-settings" class="${this.currentSession.decision_model_enabled ? '' : 'd-none'}">
+                        <div class="row mb-3">
+                          <div class="col-md-6">
+                            <label class="form-label">Decision Model Provider</label>
+                            <select class="form-select" id="config-decision-model-provider" data-action="decision-model-provider-change">
+                              <option value="ollama" ${decisionProvider !== 'jev' ? 'selected' : ''}>Local (Ollama)</option>
+                              <option value="jev" ${decisionProvider === 'jev' ? 'selected' : ''}>Remote (Jev)</option>
+                            </select>
+                          </div>
+                          <div class="col-md-6">
+                            <label class="form-label">Decision Model</label>
+                            <select class="form-select" id="config-decision-model-model">
+                              ${this.decisionModelOptions(decisionProvider, decisionModel)}
+                            </select>
+                          </div>
+                        </div>
+                        <div id="decision-model-ollama-config" class="row mb-3 ${decisionProvider === 'jev' ? 'd-none' : ''}">
+                          <div class="col-md-6">
+                            <label class="form-label">Ollama Address</label>
+                            <input type="text" class="form-control" id="config-decision-ollama-address"
+                                   placeholder="localhost" value="${escapeHtml(this.getDecisionModelAddress(decisionConfig))}">
+                            <div class="form-text">Host for the local Nimble server (default localhost).</div>
+                          </div>
+                          <div class="col-md-6">
+                            <label class="form-label">Ollama Port</label>
+                            <input type="number" class="form-control" id="config-decision-ollama-port"
+                                   placeholder="11434" min="1" max="65535" value="${escapeHtml(this.getDecisionModelPort(decisionConfig))}">
+                            <div class="form-text">Ollama port (default 11434). Requires Ollama 0.35 or later.</div>
+                          </div>
+                        </div>
+                        <div id="decision-model-jev-config" class="row mb-3 ${decisionProvider === 'jev' ? '' : 'd-none'}">
+                          <div class="col-md-12">
+                            <label class="form-label">Jev API Key</label>
+                            <input type="password" class="form-control" id="config-decision-model-api-key"
+                                   placeholder="Leave empty to use TYPESAFE_API_KEY"
+                                   value="${escapeHtml(this.getOrchestratorApiKey(decisionConfig))}">
+                            <div class="form-text">API key for api.typesafe.ai. Leave empty to use TYPESAFE_API_KEY from the environment.</div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </form>
                 </div>
@@ -1116,8 +1190,8 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       html += '<div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-0"><thead class="table-light"><tr>';
       html += '<th>ID</th><th>Task key</th><th>Schedule</th><th>Type</th><th>Created by</th><th>Next run</th><th>Last run</th><th>Enabled</th></tr></thead><tbody>';
       for (const job of group.jobs || []) {
-        const nextRun = job.next_run_at ? escapeHtml(new Date(job.next_run_at).toLocaleString()) : '—';
-        const lastRun = job.last_run_at ? escapeHtml(new Date(job.last_run_at).toLocaleString()) : '—';
+        const nextRun = escapeHtml(formatAppDateTime(job.next_run_at) || '—');
+        const lastRun = escapeHtml(formatAppDateTime(job.last_run_at) || '—');
         const schedule = escapeHtml((job.schedule_type === 'cron' ? job.schedule_value : `every ${job.schedule_value}s`) || '—');
         const taskType = escapeHtml((job.task_type || '').toLowerCase());
         const taskKey = job.task_key ? escapeHtml(job.task_key) : '—';
@@ -1210,8 +1284,8 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
           <tbody>
             ${chats.map((c) => {
               const label = c.username ? `@${c.username}` : (c.display_name || c.chat_id);
-              const linked = c.created_at ? new Date(c.created_at.replace(' ', 'T') + (c.created_at.includes('Z') ? '' : 'Z')).toLocaleString() : '—';
-              const last = c.last_message_at ? new Date(c.last_message_at).toLocaleString() : '—';
+              const linked = formatAppDateTime(c.created_at) || '—';
+              const last = formatAppDateTime(c.last_message_at) || '—';
               return `<tr>
                 <td>${esc(label)}${c.display_name && c.username ? ` <span class="text-muted small">${esc(c.display_name)}</span>` : ''}</td>
                 <td class="small">${esc(linked)}</td>
@@ -2086,6 +2160,86 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
   }
 
   /**
+   * Display name for a provider option.
+   */
+  providerOptionLabel(provider) {
+    const name = provider.type === 'llamacpp'
+      ? 'llama.cpp'
+      : provider.type.charAt(0).toUpperCase() + provider.type.slice(1);
+    return `${name}${provider.requiresApiKey ? '' : ' (Local)'}`;
+  }
+
+  /**
+   * Default llama.cpp host and port from provider info.
+   */
+  llamaCppDefaultParts() {
+    const llamaProvider = this.providers.find(p => p.type === 'llamacpp');
+    const defaultURL = llamaProvider?.defaultLlamaCppBaseURL || 'http://localhost:8080/v1';
+    try {
+      const url = new URL(defaultURL);
+      return { host: url.hostname || 'localhost', port: url.port || '8080' };
+    } catch {
+      return { host: 'localhost', port: '8080' };
+    }
+  }
+
+  /**
+   * llama.cpp address from a llamacpp config, otherwise the default host.
+   */
+  getLlamaCppAddress(config) {
+    try {
+      const parsedConfig = typeof config === 'string' ? JSON.parse(config) : config;
+      if (parsedConfig?.baseURL) {
+        return new URL(parsedConfig.baseURL).hostname || 'localhost';
+      }
+    } catch (e) {
+      // Ignore parsing errors
+    }
+    return this.llamaCppDefaultParts().host;
+  }
+
+  /**
+   * llama.cpp port from a llamacpp config, otherwise 8080.
+   */
+  getLlamaCppPort(config) {
+    try {
+      const parsedConfig = typeof config === 'string' ? JSON.parse(config) : config;
+      if (parsedConfig?.baseURL) {
+        return new URL(parsedConfig.baseURL).port || '8080';
+      }
+    } catch (e) {
+      // Ignore parsing errors
+    }
+    return this.llamaCppDefaultParts().port;
+  }
+
+  /**
+   * Build http://host:port/v1 from the orchestrator llama.cpp fields.
+   */
+  buildLlamaCppBaseURLFromForm() {
+    const addressRaw = (document.getElementById('config-llamacpp-address')?.value || 'localhost').trim();
+    const portRaw = (document.getElementById('config-llamacpp-port')?.value || '8080').trim();
+    let host = 'localhost';
+    let port = '8080';
+    if (addressRaw) {
+      try {
+        if (/^https?:\/\//i.test(addressRaw)) {
+          const u = new URL(addressRaw);
+          host = u.hostname;
+          port = u.port || '8080';
+        } else {
+          host = addressRaw.replace(/^\/+|\/+$/g, '');
+          port = portRaw || '8080';
+        }
+      } catch {
+        host = addressRaw;
+        port = portRaw || '8080';
+      }
+    }
+    return `http://${host}:${port}/v1`;
+  }
+
+  /**
    * Get orchestrator API key from config or empty string
    */
   getOrchestratorApiKey(config) {
@@ -2123,6 +2277,100 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
     }
     
     return 60000; // Default 60 seconds
+  }
+
+  /**
+   * Options for the decision-model dropdown. Nimble locally, Jev remotely.
+   */
+  decisionModelOptions(provider, selected) {
+    const options = provider === 'jev'
+      ? [{ id: 'jev-latest', label: 'Jev' }]
+      : [{ id: 'nimble', label: 'Nimble' }];
+    const selectedId = options.some((option) => option.id === selected) ? selected : options[0].id;
+    return options.map((option) => (
+      `<option value="${option.id}" ${option.id === selectedId ? 'selected' : ''}>${escapeHtml(option.label)}</option>`
+    )).join('');
+  }
+
+  /**
+   * Host from a decision-model config, otherwise localhost.
+   */
+  getDecisionModelAddress(config) {
+    try {
+      const parsed = typeof config === 'string' ? JSON.parse(config) : config;
+      if (parsed?.baseURL) return new URL(parsed.baseURL).hostname || 'localhost';
+    } catch (e) {
+      // Ignore parsing errors
+    }
+    return 'localhost';
+  }
+
+  /**
+   * Port from a decision-model config, otherwise 11434.
+   */
+  getDecisionModelPort(config) {
+    try {
+      const parsed = typeof config === 'string' ? JSON.parse(config) : config;
+      if (parsed?.baseURL) return new URL(parsed.baseURL).port || '11434';
+    } catch (e) {
+      // Ignore parsing errors
+    }
+    return '11434';
+  }
+
+  /**
+   * Build http://host:port from the decision-model Ollama fields.
+   */
+  buildDecisionModelBaseURLFromForm() {
+    const addressRaw = (document.getElementById('config-decision-ollama-address')?.value || 'localhost').trim();
+    const portRaw = (document.getElementById('config-decision-ollama-port')?.value || '11434').trim();
+    let host = 'localhost';
+    let port = '11434';
+    if (addressRaw) {
+      try {
+        if (/^https?:\/\//i.test(addressRaw)) {
+          const url = new URL(addressRaw);
+          host = url.hostname;
+          port = url.port || portRaw || '11434';
+        } else {
+          host = addressRaw.replace(/^\/+|\/+$/g, '');
+          port = portRaw || '11434';
+        }
+      } catch {
+        host = addressRaw;
+        port = portRaw || '11434';
+      }
+    }
+    return `http://${host}:${port}`;
+  }
+
+  /**
+   * Show decision-model fields only while Router mode is selected.
+   */
+  onOrchestrationModeChange() {
+    const mode = document.getElementById('config-orchestration-mode')?.value || 'route';
+    document.getElementById('decision-model-section')?.classList.toggle('d-none', mode !== 'route');
+  }
+
+  /**
+   * Show provider and model fields when the decision-model checkbox is on.
+   */
+  onDecisionModelToggle() {
+    const enabled = document.getElementById('config-decision-model-enabled')?.checked;
+    document.getElementById('decision-model-settings')?.classList.toggle('d-none', !enabled);
+  }
+
+  /**
+   * Swap the model list and the local/remote connection fields.
+   */
+  onDecisionModelProviderChange() {
+    const provider = document.getElementById('config-decision-model-provider')?.value === 'jev' ? 'jev' : 'ollama';
+    const modelSelect = document.getElementById('config-decision-model-model');
+    if (modelSelect) {
+      modelSelect.innerHTML = this.decisionModelOptions(provider, modelSelect.value);
+    }
+    document.getElementById('decision-model-ollama-config')?.classList.toggle('d-none', provider !== 'ollama');
+    document.getElementById('decision-model-jev-config')?.classList.toggle('d-none', provider !== 'jev');
   }
 
   /**
@@ -2185,8 +2433,13 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         ollamaConfig.classList.add('d-none');
       }
     }
+
+    const llamaCppConfig = document.getElementById('orchestrator-llamacpp-config');
+    if (llamaCppConfig) {
+      llamaCppConfig.classList.toggle('d-none', providerType !== 'llamacpp');
+    }
     
-    // Show/hide API key config field (only for providers that require API key)
+    // API key stays visible for llama.cpp (optional) and for cloud providers.
     const apiKeyConfig = document.getElementById('orchestrator-api-key-config');
     if (apiKeyConfig) {
       if (providerType === 'ollama') {
@@ -2194,6 +2447,12 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       } else {
         apiKeyConfig.classList.remove('d-none');
       }
+    }
+    const apiKeyHint = document.getElementById('orchestrator-api-key-hint');
+    if (apiKeyHint) {
+      apiKeyHint.textContent = providerType === 'llamacpp'
+        ? 'Optional. Leave empty if llama-server was started without --api-key. Otherwise paste the key, or set LLAMACPP_API_KEY.'
+        : 'API key for the orchestrator provider. Leave empty to use the value from environment variables (.env).';
     }
   }
 
@@ -2375,6 +2634,10 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         }
         orchestratorConfig.baseURL = `http://${host}:${port}`;
       }
+
+      if (orchestratorProvider === 'llamacpp') {
+        orchestratorConfig.baseURL = this.buildLlamaCppBaseURLFromForm();
+      }
       
       // Add timeout if specified
       const timeoutInput = document.getElementById('config-orchestrator-timeout');
@@ -2400,6 +2663,18 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       // Get orchestration mode
       const orchestrationMode = document.getElementById('config-orchestration-mode')?.value || 'route';
 
+      const decisionEnabled = document.getElementById('config-decision-model-enabled')?.checked || false;
+      const decisionProvider = document.getElementById('config-decision-model-provider')?.value === 'jev' ? 'jev' : 'ollama';
+      const decisionModel = document.getElementById('config-decision-model-model')?.value
+        || (decisionProvider === 'jev' ? 'jev-latest' : 'nimble');
+      const decisionConfig = { model: decisionModel };
+      if (decisionProvider === 'ollama') {
+        decisionConfig.baseURL = this.buildDecisionModelBaseURLFromForm();
+      } else {
+        const decisionApiKey = document.getElementById('config-decision-model-api-key')?.value?.trim();
+        if (decisionApiKey) decisionConfig.apiKey = decisionApiKey;
+      }
+
       // Update session
       await api.sessions.update(this.currentSession.id, {
         name,
@@ -2411,6 +2686,9 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         conversation_max_rounds: maxRounds,
         conversation_token_budget: tokenBudget,
         orchestration_mode: orchestrationMode,
+        decision_model_enabled: decisionEnabled ? 1 : 0,
+        decision_model_provider: decisionProvider,
+        decision_model_config: decisionConfig,
       });
 
       // Get selected agents
@@ -2755,6 +3033,15 @@ document.addEventListener('change', (e) => {
       break;
     case 'conversation-mode-toggle':
       sessionConfig.onConversationModeToggle();
+      break;
+    case 'orchestration-mode-change':
+      sessionConfig.onOrchestrationModeChange();
+      break;
+    case 'decision-model-toggle':
+      sessionConfig.onDecisionModelToggle();
+      break;
+    case 'decision-model-provider-change':
+      sessionConfig.onDecisionModelProviderChange();
       break;
   }
 });

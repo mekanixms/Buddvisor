@@ -17,6 +17,7 @@ const promptsLogger = logger.promptsLogger;
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
 const { expandPromptMacros } = require('../../utils/promptMacros');
 const { usageFromResponse, tokenRow, mergeTokenRows } = require('./tokenUsage');
+const DecisionRouter = require('./DecisionRouter');
 
 const DOCUMENT_ADMIN_TOOL = 'manage_agent_documents';
 const TOOL_ADMIN_TOOL = 'manage_agent_tools';
@@ -147,6 +148,21 @@ class OrchestratorAgent {
    * Analyze the user request and determine which agent(s) should handle it
    */
   static async analyzeAndRoute(session, agents, userMessage, documentContext) {
+    if (DecisionRouter.isEnabled(session)) {
+      try {
+        const decision = await DecisionRouter.route({
+          session,
+          agents,
+          userMessage,
+          documentContext,
+        });
+        if (decision) return decision;
+        logger.warn('Decision model routing unavailable; using the generative orchestrator');
+      } catch (error) {
+        logger.error('Decision model routing failed:', error);
+      }
+    }
+
     // Build agent descriptions for routing
     const agentDescriptions = agents.map(a => ({
       id: a.id,
@@ -181,11 +197,14 @@ class OrchestratorAgent {
     // Get timeout from session config or use default
     const timeout = this.getOrchestratorTimeout(session);
 
-    const provider = ProviderFactory.create(providerType, {
-      apiKey,
-      model,
-      timeout,
-    });
+    const providerConfig = { apiKey, model, timeout };
+    if (providerType === 'llamacpp') {
+      providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
+        || process.env.LLAMACPP_BASE_URL
+        || 'http://localhost:8080/v1';
+    }
+
+    const provider = ProviderFactory.create(providerType, providerConfig);
 
     // Build routing prompt
     const routingPrompt = this.buildRoutingPrompt(session, agentDescriptions, agents, userMessage, documentContext);
@@ -434,9 +453,9 @@ Which agent(s) should handle this request?`,
     // Get timeout from session config or use default
     const timeout = this.getOrchestratorTimeout(session);
     
-    // Get baseURL for Ollama if configured
+    // Get baseURL for local servers if configured
     const providerConfig = { apiKey, model, timeout };
-    if (providerType === 'ollama') {
+    if (providerType === 'ollama' || providerType === 'llamacpp') {
       let baseURL = null;
       if (session.orchestrator_provider_config) {
         // Config should already be decrypted by ChatService, but handle both cases
@@ -453,7 +472,10 @@ Which agent(s) should handle this request?`,
           logger.warn('Failed to parse orchestrator config for baseURL:', e.message);
         }
       }
-      providerConfig.baseURL = baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+      const fallback = providerType === 'llamacpp'
+        ? (process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1')
+        : (process.env.OLLAMA_BASE_URL || 'http://localhost:11434');
+      providerConfig.baseURL = baseURL || fallback;
     }
     
     const provider = ProviderFactory.create(providerType, providerConfig);
@@ -747,16 +769,20 @@ Summary:`;
     // Get timeout from session config or use default
     const timeout = this.getOrchestratorTimeout(session);
     
-    // Get baseURL for Ollama if configured
+    // Get baseURL for local servers if configured
     const providerConfig = { apiKey, model, timeout };
     if (providerType === 'ollama' && session.orchestrator_provider_config?.baseURL) {
       providerConfig.baseURL = session.orchestrator_provider_config.baseURL;
     } else if (providerType === 'ollama') {
       // Use default from environment
       providerConfig.baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    } else if (providerType === 'llamacpp' && session.orchestrator_provider_config?.baseURL) {
+      providerConfig.baseURL = session.orchestrator_provider_config.baseURL;
+    } else if (providerType === 'llamacpp') {
+      providerConfig.baseURL = process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1';
     }
-    if (providerType === 'ollama') {
-      logger.info(`Ollama baseURL for session ${session.id}: ${providerConfig.baseURL}`);
+    if (providerType === 'ollama' || providerType === 'llamacpp') {
+      logger.info(`${providerType} baseURL for session ${session.id}: ${providerConfig.baseURL}`);
     }
 
     const provider = ProviderFactory.create(providerType, providerConfig);
@@ -888,6 +914,10 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
       providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
         || process.env.OLLAMA_BASE_URL
         || 'http://localhost:11434';
+    } else if (providerType === 'llamacpp') {
+      providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
+        || process.env.LLAMACPP_BASE_URL
+        || 'http://localhost:8080/v1';
     }
     const provider = ProviderFactory.create(providerType, providerConfig);
 
@@ -1643,6 +1673,7 @@ Always recommend consulting with a CPA for specific tax advice.`,
       qwen: process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY,
       kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
       ollama: 'not-required',
+      llamacpp: process.env.LLAMACPP_API_KEY || 'not-required',
     };
     return envKeys[providerType];
   }
@@ -1680,6 +1711,7 @@ Always recommend consulting with a CPA for specific tax advice.`,
       openai: 'gpt-5-mini',
       gemini: 'gemini-2.5-flash',
       ollama: 'granite4:small-h',
+      llamacpp: 'local',
     };
     return defaultModels[providerType];
   }

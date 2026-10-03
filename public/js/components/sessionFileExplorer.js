@@ -176,7 +176,7 @@ class SessionFileExplorer {
       const isDir = ent.type === 'directory' || ent.target_type === 'directory';
       const icon = isDir ? 'bi-folder-fill text-warning' : (ent.type === 'symlink' ? 'bi-link-45deg' : 'bi-file-earmark');
       const size = isDir ? '—' : this.formatSize(ent.size);
-      const mtime = ent.mtime ? new Date(ent.mtime).toLocaleString() : '—';
+      const mtime = formatAppDateTime(ent.mtime) || '—';
       const badge = ent.type === 'symlink' ? ' <span class="badge text-bg-light border">link</span>' : '';
       const locked = ent.protected
         ? ' <i class="bi bi-lock text-muted" title="Managed workspace link"></i>'

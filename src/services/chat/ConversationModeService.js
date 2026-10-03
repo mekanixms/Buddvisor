@@ -561,6 +561,8 @@ Guidelines:
     }
     if (providerType === 'ollama') {
       providerConfig.baseURL = baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    } else if (providerType === 'llamacpp') {
+      providerConfig.baseURL = baseURL || process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1';
     }
 
     return ProviderFactory.create(providerType, providerConfig);
@@ -579,6 +581,7 @@ Guidelines:
       qwen: process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY,
       kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
       ollama: 'not-required',
+      llamacpp: process.env.LLAMACPP_API_KEY || 'not-required',
     };
     return envKeys[providerType];
   }
@@ -593,6 +596,7 @@ Guidelines:
       gemini: 'gemini-1.5-pro',
       xai: 'grok-beta',
       ollama: 'llama3.1',
+      llamacpp: 'local',
     };
     return defaultModels[providerType];
   }

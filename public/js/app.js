@@ -395,7 +395,8 @@ function showToast(message, type = 'info') {
  * @returns {string} - Formatted date
  */
 function formatDate(dateString) {
-  const date = new Date(dateString);
+  const date = typeof parseAppDate === 'function' ? parseAppDate(dateString) : new Date(dateString);
+  if (!date || Number.isNaN(date.getTime())) return '';
   const now = new Date();
   const diff = now - date;
 
@@ -423,7 +424,7 @@ function formatDate(dateString) {
   }
 
   // Otherwise, show date
-  return date.toLocaleDateString();
+  return typeof formatAppDateOnly === 'function' ? formatAppDateOnly(date) : date.toLocaleDateString();
 }
 
 /**

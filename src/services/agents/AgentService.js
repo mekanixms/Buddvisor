@@ -395,6 +395,7 @@ class AgentService {
         deepseek: process.env.DEEPSEEK_API_KEY,
         qwen: process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY,
         kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
+        llamacpp: process.env.LLAMACPP_API_KEY,
       };
 
       if (envKeys[agent.provider_type]) {
@@ -406,6 +407,10 @@ class AgentService {
     // For Ollama, ensure baseURL is set (use default if not in config)
     if (agent.provider_type === 'ollama' && !config.baseURL) {
       config.baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    }
+
+    if (agent.provider_type === 'llamacpp' && !config.baseURL) {
+      config.baseURL = process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1';
     }
 
     // overrides apply to this call only (not saved). minTimeout raises the wait

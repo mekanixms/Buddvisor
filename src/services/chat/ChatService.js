@@ -576,6 +576,7 @@ class ChatService {
 
     // Get API key from session config first, then fall back to environment
     let apiKey = null;
+    let parsedOrchestratorConfig = null;
     if (session.orchestrator_provider_config) {
       try {
         let config = session.orchestrator_provider_config;
@@ -583,6 +584,7 @@ class ChatService {
           const { decrypt } = require('../../utils/encryption');
           config = JSON.parse(decrypt(config));
         }
+        parsedOrchestratorConfig = config;
         if (config.apiKey && config.apiKey.trim()) {
           apiKey = config.apiKey.trim();
         }
@@ -606,10 +608,14 @@ class ChatService {
     const OrchestratorAgent = require('./OrchestratorAgent');
     const model = OrchestratorAgent.getOrchestratorModel(session, providerType);
 
-    const provider = ProviderFactory.create(providerType, {
-      apiKey,
-      model,
-    });
+    const providerConfig = { apiKey, model };
+    if (providerType === 'llamacpp') {
+      providerConfig.baseURL = parsedOrchestratorConfig?.baseURL
+        || process.env.LLAMACPP_BASE_URL
+        || 'http://localhost:8080/v1';
+    }
+
+    const provider = ProviderFactory.create(providerType, providerConfig);
 
     const systemPrompt = expandPromptMacros(`You are a helpful assistant for a small multi agent AI application.
 ${documentContext ? `Use the following document context to help answer questions:\n${documentContext}` : ''}
@@ -676,6 +682,7 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       qwen: process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY,
       kimi: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
       ollama: 'not-required', // Ollama doesn't need an API key
+      llamacpp: process.env.LLAMACPP_API_KEY || 'not-required',
     };
     return envKeys[providerType];
   }
@@ -690,6 +697,7 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       gemini: 'gemini-1.5-pro',
       xai: 'grok-beta',
       ollama: 'llama3.1',
+      llamacpp: 'local',
     };
     return defaultModels[providerType];
   }
@@ -884,13 +892,16 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       const model = OrchestratorAgent.getOrchestratorModel(session, providerType);
       const configuredTimeout = OrchestratorAgent.getOrchestratorTimeout(session);
       const cfg = session.orchestrator_provider_config || {};
+      const llamaCppBaseURL = providerType === 'llamacpp'
+        ? (cfg.baseURL || process.env.LLAMACPP_BASE_URL || 'http://localhost:8080/v1')
+        : cfg.baseURL;
       provider = ProviderFactory.create(providerType, {
         apiKey,
         model,
         timeout: Math.max(Number(configuredTimeout) || 0, SUMMARY_CALL_TIMEOUT_MS),
         ...(cfg.maxTokens ? { maxTokens: cfg.maxTokens } : {}),
         ...(cfg.temperature != null ? { temperature: cfg.temperature } : {}),
-        ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}),
+        ...(llamaCppBaseURL ? { baseURL: llamaCppBaseURL } : {}),
       });
     }
 

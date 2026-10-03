@@ -147,6 +147,15 @@ class SessionService {
         }
       }
 
+      if (session.decision_model_config) {
+        try {
+          session.decision_model_config = JSON.parse(decrypt(session.decision_model_config));
+        } catch (error) {
+          logger.warn('Failed to decrypt decision model config:', error);
+          session.decision_model_config = null;
+        }
+      }
+
       // Sanitize agent provider configs for UI (no API keys)
       if (Array.isArray(session.agents)) {
         session.agents = session.agents.map((a) => {
@@ -346,6 +355,7 @@ class SessionService {
     full.orchestrator_tool_assignments = orchestratorAssignments;
 
     full.orchestrator_provider_config = null;
+    full.decision_model_config = null;
     return full;
   }
 
@@ -500,6 +510,28 @@ class SessionService {
           throw new Error('Orchestration mode must be "route" or "orchestrator_led"');
         }
         allowedUpdates.orchestration_mode = updates.orchestration_mode;
+      }
+
+      if (updates.decision_model_enabled !== undefined) {
+        allowedUpdates.decision_model_enabled = updates.decision_model_enabled ? 1 : 0;
+      }
+
+      if (updates.decision_model_provider !== undefined) {
+        if (updates.decision_model_provider === null || updates.decision_model_provider === '') {
+          allowedUpdates.decision_model_provider = null;
+        } else if (!['ollama', 'jev'].includes(updates.decision_model_provider)) {
+          throw new Error('Decision model provider must be "ollama" or "jev"');
+        } else {
+          allowedUpdates.decision_model_provider = updates.decision_model_provider;
+        }
+      }
+
+      if (updates.decision_model_config !== undefined) {
+        if (updates.decision_model_config && Object.keys(updates.decision_model_config).length > 0) {
+          allowedUpdates.decision_model_config = encrypt(JSON.stringify(updates.decision_model_config));
+        } else {
+          allowedUpdates.decision_model_config = null;
+        }
       }
 
       if (updates.pinned !== undefined) {
@@ -849,6 +881,9 @@ class SessionService {
           conversation_mode_enabled: session.conversation_mode_enabled || false,
           conversation_max_rounds: session.conversation_max_rounds || 10,
           conversation_token_budget: session.conversation_token_budget || 50000,
+          decision_model_enabled: session.decision_model_enabled ? 1 : 0,
+          decision_model_provider: session.decision_model_provider || null,
+          decision_model_config: session.decision_model_config || null,
         },
         agents: session.agents.map(agent => ({
           name: agent.name,
@@ -943,6 +978,20 @@ class SessionService {
           conversation_max_rounds: importData.session.conversation_max_rounds || 10,
           conversation_token_budget: importData.session.conversation_token_budget || 50000,
         });
+      }
+
+      const decisionUpdates = {};
+      if (importData.session.decision_model_enabled !== undefined) {
+        decisionUpdates.decision_model_enabled = importData.session.decision_model_enabled ? 1 : 0;
+      }
+      if (['ollama', 'jev'].includes(importData.session.decision_model_provider)) {
+        decisionUpdates.decision_model_provider = importData.session.decision_model_provider;
+      }
+      if (importData.session.decision_model_config && typeof importData.session.decision_model_config === 'object') {
+        decisionUpdates.decision_model_config = importData.session.decision_model_config;
+      }
+      if (Object.keys(decisionUpdates).length > 0) {
+        await this.updateSession(session.id, userId, decisionUpdates);
       }
 
       // Match and assign agents by name
@@ -1140,6 +1189,12 @@ class SessionService {
         conversation_mode_enabled: originalSession.conversation_mode_enabled || 0,
         conversation_max_rounds: originalSession.conversation_max_rounds || 10,
         conversation_token_budget: originalSession.conversation_token_budget || 50000,
+      });
+
+      await this.updateSession(newSession.id, userId, {
+        decision_model_enabled: originalSession.decision_model_enabled ? 1 : 0,
+        decision_model_provider: originalSession.decision_model_provider || null,
+        decision_model_config: originalSession.decision_model_config || null,
       });
 
       // Assign the same agents

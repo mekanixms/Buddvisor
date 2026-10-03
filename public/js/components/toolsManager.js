@@ -284,7 +284,7 @@ class ToolsManager {
                     ${exec.success ? 'Success' : 'Failed'}
                   </span>
                 </td>
-                <td>${new Date(exec.timestamp).toLocaleTimeString()}</td>
+                <td>${formatAppTime(exec.timestamp)}</td>
                 <td>${exec.duration}ms</td>
                 <td>
                   <button class="btn btn-sm btn-outline-secondary view-result-btn" data-exec-idx="${idx}">

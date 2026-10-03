@@ -14,6 +14,7 @@ class Settings {
       contextLength: 50,
       compactMode: false,
       notifications: true,
+      timezoneOffset: 'auto',
     };
     this.settings = this.load();
     this.currentUser = null;
@@ -94,6 +95,29 @@ class Settings {
     if (streamingToggle) {
       streamingToggle.checked = this.settings.chatStreaming;
     }
+
+    if (typeof refreshDisplayedTimes === 'function') {
+      refreshDisplayedTimes();
+    }
+  }
+
+  /**
+   * Options for the GMT offset selector. "auto" follows this computer.
+   */
+  timezoneOptionsHtml() {
+    const current = String(this.settings.timezoneOffset ?? 'auto');
+    const browserMinutes = -new Date().getTimezoneOffset();
+    const autoLabel = `Automatic (${formatGmtLabel(browserMinutes)})`;
+    const options = [
+      `<option value="auto" ${current === 'auto' ? 'selected' : ''}>${autoLabel}</option>`,
+    ];
+    for (let hour = -12; hour <= 14; hour++) {
+      const value = String(hour);
+      options.push(
+        `<option value="${value}" ${current === value ? 'selected' : ''}>${formatGmtLabel(hour * 60)}</option>`
+      );
+    }
+    return options.join('');
   }
 
   /**
@@ -151,6 +175,14 @@ class Settings {
               <div class="tab-content mt-3" id="settingsTabContent">
                 <!-- General Settings -->
                 <div class="tab-pane fade show active" id="general-pane" role="tabpanel">
+                  <div class="mb-3">
+                    <label class="form-label" for="setting-timezoneOffset">Timezone</label>
+                    <select class="form-select" id="setting-timezoneOffset">
+                      ${this.timezoneOptionsHtml()}
+                    </select>
+                    <div class="form-text">Chat messages and other times in the app use this offset. Automatic follows this computer, including daylight saving. The server keeps times in UTC.</div>
+                  </div>
+
                   <div class="mb-3">
                     <label class="form-label">Default LLM Provider</label>
                     <select class="form-select" id="setting-defaultProvider">
@@ -480,7 +512,7 @@ class Settings {
               ? '<span class="badge bg-success">Active</span>' 
               : '<span class="badge bg-warning">Pending</span>'}
           </td>
-          <td>${new Date(user.created_at).toLocaleDateString()}</td>
+          <td>${formatAppDateOnly(user.created_at) || '—'}</td>
           <td>
             <button class="btn btn-sm ${isActive ? 'btn-outline-secondary' : 'btn-outline-success'} me-1" 
                     data-action="toggle-user-active" 
@@ -592,6 +624,14 @@ class Settings {
     this.settings.chatStreaming = document.getElementById('setting-chatStreaming').checked;
     this.settings.showToolIndicators = document.getElementById('setting-showToolIndicators').checked;
     this.settings.notifications = document.getElementById('setting-notifications').checked;
+
+    const timezoneValue = document.getElementById('setting-timezoneOffset').value;
+    if (timezoneValue === 'auto') {
+      this.settings.timezoneOffset = 'auto';
+    } else {
+      const hour = parseInt(timezoneValue, 10);
+      this.settings.timezoneOffset = Number.isFinite(hour) ? String(Math.min(14, Math.max(-12, hour))) : 'auto';
+    }
 
     // Appearance
     this.settings.theme = document.getElementById('setting-theme').value;
