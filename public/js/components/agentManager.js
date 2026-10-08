@@ -12,7 +12,7 @@ class AgentManager {
     this.customModel = null; // Store custom model value for current modal
     /** @type {object|null} Parsed Hugging Face capability payload to save with the agent */
     this._pendingHfCapabilities = null;
-    /** When true, next save clears hf_model_repo + model_capabilities in DB */
+    /** When true, next save clears hf_model_repo. Capability checkboxes are saved as set. */
     this._clearHfMetadata = false;
 
     /** @type {object|null} Parsed OpenRouter capability payload to save with the agent */
@@ -412,7 +412,7 @@ class AgentManager {
                     </button>
                   </div>
                   <div class="form-text text-muted mb-1">
-                    Uses the public Hub API (<code>/api/models/&lt;repo&gt;</code>). Set <code>HUGGINGFACE_API_KEY</code> on the server for private or gated models. Capabilities appear in the info box above after <strong>Fetch</strong>.
+                    Uses the public Hub API (<code>/api/models/&lt;repo&gt;</code>). Set <code>HUGGINGFACE_API_KEY</code> on the server for private or gated models. <strong>Fetch</strong> checks the capability boxes above from the Hub tags.
                   </div>
                 </div>
 
@@ -431,7 +431,7 @@ class AgentManager {
                     </button>
                   </div>
                   <div class="form-text text-muted mb-1">
-                    Uses OpenRouter’s public model catalog (<code>/api/v1/models</code>). Set <code>OPENROUTER_API_KEY</code> on the server if needed.
+                    Uses OpenRouter’s public model catalog (<code>/api/v1/models</code>). Set <code>OPENROUTER_API_KEY</code> on the server if needed. <strong>Fetch</strong> checks the capability boxes above from the catalog.
                   </div>
                 </div>
 
@@ -501,70 +501,35 @@ class AgentManager {
   }
 
   /**
-   * Best-effort capability flags from provider + model id (matches server heuristics).
+   * Capability checkboxes in the agent editor. A fetch sets them; the user can change them.
    */
-  getInferredCapabilitiesClient(providerType, modelId) {
-    const t = String(providerType || '').toLowerCase();
-    const m = String(modelId || '').toLowerCase();
-    let vision = false;
-    if (t === 'openai') vision = m.includes('4o') || m.includes('vision');
-    else if (t === 'xai') vision = m.includes('vision');
-    else if (t === 'gemini') vision = true;
-    else if (t === 'claude') vision = true;
-    else if (t === 'ollama') {
-      vision =
-        m.includes('vl') ||
-        m.includes('vision') ||
-        m.includes('llava') ||
-        m.includes('moondream') ||
-        m.includes('gemma') ||
-        m.includes('minicpm-v') ||
-        m.includes('bakllava') ||
-        m.includes('cogvlm') ||
-        m.includes('pixtral') ||
-        m.includes('llama3.2-vision') ||
-        m.includes('granite3.2-vision');
-    } else if (t === 'kimi') vision = m.includes('k2');
-    const audio = t === 'ollama' && (m.includes('gemma') || m.includes('qwen2-audio') || m.includes('qwen-audio'));
-    return {
-      text: true,
-      vision,
-      audio,
-      video: false,
-      thinking: false,
-      prompt_caching_hint: false,
-    };
+  static CAPABILITY_FLAGS = [
+    ['text', 'text'],
+    ['vision', 'vision'],
+    ['audio', 'audio'],
+    ['video', 'video'],
+    ['thinking', 'thinking'],
+    ['prompt_caching_hint', 'prompt cache'],
+  ];
+
+  flagsFromCapabilities(caps) {
+    const flags = {};
+    for (const [key] of AgentManager.CAPABILITY_FLAGS) {
+      flags[key] = !!(caps && caps[key]);
+    }
+    return flags;
   }
 
   /**
-   * Merge saved HF capabilities (if any) with client-side provider/model heuristics.
+   * Current checkbox state, or null before the editor has rendered them.
    */
-  mergeCapabilitiesForDisplay(storedHf, providerType, modelId) {
-    const inferred = this.getInferredCapabilitiesClient(providerType, modelId);
-    if (!storedHf || typeof storedHf !== 'object') {
-      return { merged: { ...inferred }, hfMeta: null };
+  readCapabilityChecks() {
+    if (!document.getElementById('agent-cap-text')) return null;
+    const flags = {};
+    for (const [key] of AgentManager.CAPABILITY_FLAGS) {
+      flags[key] = !!document.getElementById(`agent-cap-${key}`)?.checked;
     }
-    return {
-      merged: {
-        text: typeof storedHf.text === 'boolean' ? storedHf.text : inferred.text,
-        vision: typeof storedHf.vision === 'boolean' ? storedHf.vision : inferred.vision,
-        audio: typeof storedHf.audio === 'boolean' ? storedHf.audio : inferred.audio,
-        video: typeof storedHf.video === 'boolean' ? storedHf.video : inferred.video,
-        thinking: typeof storedHf.thinking === 'boolean' ? storedHf.thinking : inferred.thinking,
-        prompt_caching_hint:
-          typeof storedHf.prompt_caching_hint === 'boolean'
-            ? storedHf.prompt_caching_hint
-            : inferred.prompt_caching_hint,
-      },
-      hfMeta: {
-        repo_id: storedHf.repo_id,
-        pipeline_tag: storedHf.pipeline_tag,
-        library_name: storedHf.library_name,
-        fetched_at: storedHf.fetched_at,
-        source: storedHf.source,
-        runtime_hints: storedHf.hf_runtime_hints || null,
-      },
-    };
+    return flags;
   }
 
   _combineCapabilitiesForSave(hfCaps, orCaps) {
@@ -584,34 +549,35 @@ class AgentManager {
   }
 
   /**
-   * Render merged capabilities inside the alert-info box (#agent-capabilities-alert-body).
+   * Render capability checkboxes and fetch metadata inside the alert-info box.
+   * @param {object} [flagOverride] - When set (after a fetch), these replace the checkbox state.
    */
-  refreshCapabilitiesAlert() {
+  refreshCapabilitiesAlert(flagOverride) {
     const body = document.getElementById('agent-capabilities-alert-body');
     if (!body) return;
 
-    const provider = document.getElementById('agent-provider')?.value || '';
-    const model = this.getCurrentModalModel();
     const hf = this._clearHfMetadata ? null : this._pendingHfCapabilities;
     const orCaps = this._clearOpenRouterMetadata ? null : this._pendingOpenRouterCapabilities;
-    const primaryCaps = orCaps || hf;
-    const { merged, hfMeta } = this.mergeCapabilitiesForDisplay(primaryCaps, provider, model);
+    const flags = flagOverride
+      || this.readCapabilityChecks()
+      || this.flagsFromCapabilities(orCaps || hf);
 
-    const cacheEl = document.getElementById('agent-enable-prompt-cache');
-    const cacheOn = cacheEl?.checked;
-    const displayMerged = {
-      ...merged,
-      prompt_caching_hint: !!cacheOn || !!merged.prompt_caching_hint,
-    };
+    const boxes = AgentManager.CAPABILITY_FLAGS.map(([key, label]) => `
+      <div class="form-check form-check-inline mb-1">
+        <input class="form-check-input" type="checkbox" id="agent-cap-${key}" ${flags[key] ? 'checked' : ''}>
+        <label class="form-check-label" for="agent-cap-${key}">${escapeHtml(label)}</label>
+      </div>
+    `).join('');
 
-    const flagKeys = ['text', 'vision', 'audio', 'video', 'thinking', 'prompt_caching_hint'];
-    const badges = flagKeys
-      .filter((k) => displayMerged[k])
-      .map((k) => {
-        const label = k === 'prompt_caching_hint' ? 'prompt cache' : k;
-        return `<span class="badge bg-primary me-1 mb-1">${escapeHtml(label)}</span>`;
-      })
-      .join('');
+    const hfMeta = hf && (hf.repo_id || hf.pipeline_tag || hf.library_name)
+      ? {
+        repo_id: hf.repo_id,
+        pipeline_tag: hf.pipeline_tag,
+        library_name: hf.library_name,
+        fetched_at: hf.fetched_at,
+        runtime_hints: hf.hf_runtime_hints || null,
+      }
+      : null;
 
     let hfBlock = '';
     if (hfMeta && (hfMeta.repo_id || hfMeta.pipeline_tag || hfMeta.library_name)) {
@@ -666,13 +632,13 @@ class AgentManager {
         </div>
       `;
     } else {
-      hfBlock = `<div class="small text-muted mt-1 mb-0">No Hugging Face metadata yet. Enter a repo below and click <strong>Fetch</strong> to merge Hub tags into the flags above.</div>`;
+      hfBlock = `<div class="small text-muted mt-1 mb-0">No Hugging Face metadata yet. Enter a repo below and click <strong>Fetch</strong> to set the checkboxes from Hub tags.</div>`;
     }
 
     let orBlock = '';
-    if (primaryCaps && primaryCaps.openrouter_model_id) {
-      const hints = primaryCaps.openrouter_runtime_hints;
-      const modelId = primaryCaps.openrouter_model_id;
+    if (orCaps && orCaps.openrouter_model_id) {
+      const hints = orCaps.openrouter_runtime_hints;
+      const modelId = orCaps.openrouter_model_id;
       const rows = [];
       if (hints && typeof hints === 'object') {
         if (hints.context_length != null) {
@@ -704,10 +670,10 @@ class AgentManager {
 
     body.innerHTML = `
       <div class="fw-semibold mb-1"><i class="bi bi-cpu me-1"></i>Model capabilities</div>
-      <div>${badges || '<span class="text-muted">No flags active</span>'}</div>
+      <div>${boxes}</div>
       ${hfBlock}
       ${orBlock}
-      <div class="small text-muted mt-1 mb-0">Flags combine saved HF data (when present) with best-effort guesses from provider and model id.</div>
+      <div class="small text-muted mt-1 mb-0">A Hugging Face or OpenRouter fetch checks these. You can change them before saving.</div>
     `;
   }
 
@@ -726,7 +692,7 @@ class AgentManager {
       this._pendingHfCapabilities = caps;
       this._clearHfMetadata = false;
       if (input && caps.repo_id) input.value = caps.repo_id;
-      this.refreshCapabilitiesAlert();
+      this.refreshCapabilitiesAlert(this.flagsFromCapabilities(caps));
       showToast('Hugging Face metadata loaded', 'success');
     } catch (e) {
       console.error(e);
@@ -758,7 +724,7 @@ class AgentManager {
       this._pendingOpenRouterCapabilities = caps;
       this._clearOpenRouterMetadata = false;
       if (input && caps.openrouter_model_id) input.value = caps.openrouter_model_id;
-      this.refreshCapabilitiesAlert();
+      this.refreshCapabilitiesAlert(this.flagsFromCapabilities(caps));
       showToast('OpenRouter metadata loaded', 'success');
     } catch (e) {
       console.error(e);
@@ -1192,15 +1158,15 @@ class AgentManager {
       }
     }
 
+    const capabilityFlags = this.readCapabilityChecks() || this.flagsFromCapabilities(null);
     const combinedCaps = this._combineCapabilitiesForSave(
       this._clearHfMetadata ? null : this._pendingHfCapabilities,
       this._clearOpenRouterMetadata ? null : this._pendingOpenRouterCapabilities
-    );
-    if (this._clearHfMetadata && this._clearOpenRouterMetadata) {
-      agentData.model_capabilities = null;
-    } else if (combinedCaps) {
-      agentData.model_capabilities = combinedCaps;
+    ) || { source: 'manual' };
+    for (const [key] of AgentManager.CAPABILITY_FLAGS) {
+      combinedCaps[key] = !!capabilityFlags[key];
     }
+    agentData.model_capabilities = combinedCaps;
 
     try {
       if (isEdit) {
@@ -1561,10 +1527,6 @@ document.addEventListener('click', (e) => {
 
 // Event delegation for change events
 document.addEventListener('change', (e) => {
-  if (e.target?.id === 'agent-enable-prompt-cache') {
-    agentManager.refreshCapabilitiesAlert();
-  }
-
   const target = e.target.closest('[data-action]');
   if (!target) return;
 

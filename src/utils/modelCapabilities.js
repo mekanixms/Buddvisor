@@ -1,61 +1,16 @@
 /**
- * Model capability hints for UI and tools (best-effort; actual support depends on provider integration).
+ * Stored model capability flags. Values come from a Hugging Face or OpenRouter
+ * fetch, or from the checkboxes in the agent editor. Nothing is inferred from
+ * the provider or model id.
  */
 
-/** Best-effort: Ollama model id suggests native audio input (used by process_media). */
-function ollamaModelLikelySupportsAudio(modelId) {
-  const m = String(modelId || '').toLowerCase();
-  return (
-    m.includes('gemma') ||
-    m.includes('qwen2-audio') ||
-    m.includes('qwen-audio')
-  );
-}
+const CAPABILITY_FLAG_KEYS = ['text', 'vision', 'audio', 'video', 'thinking', 'prompt_caching_hint'];
 
-/** Best-effort: Ollama model id suggests native image input (used by process_media). */
-function ollamaModelLikelySupportsVision(modelId) {
-  const m = String(modelId || '').toLowerCase();
-  return (
-    m.includes('vl') ||
-    m.includes('vision') ||
-    m.includes('llava') ||
-    m.includes('moondream') ||
-    m.includes('gemma') || // Gemma 3+ multimodal on Ollama
-    m.includes('minicpm-v') ||
-    m.includes('bakllava') ||
-    m.includes('cogvlm') ||
-    m.includes('pixtral') ||
-    m.includes('llama3.2-vision') ||
-    m.includes('granite3.2-vision')
-  );
-}
-
-function inferModelCapabilities(providerType, modelId) {
-  const t = String(providerType || '').toLowerCase();
-  const m = String(modelId || '').toLowerCase();
-
-  let vision = false;
-  let audio = false;
-
-  if (t === 'openai') {
-    vision = m.includes('4o') || m.includes('vision');
-  } else if (t === 'xai') {
-    vision = m.includes('vision');
-  } else if (t === 'gemini') {
-    vision = true;
-  } else if (t === 'claude') {
-    vision = true;
-  } else if (t === 'ollama') {
-    vision = ollamaModelLikelySupportsVision(m);
-    audio = ollamaModelLikelySupportsAudio(m);
-  } else if (t === 'kimi') {
-    vision = m.includes('k2');
-  }
-
+function emptyCapabilityFlags() {
   return {
-    text: true,
-    vision,
-    audio,
+    text: false,
+    vision: false,
+    audio: false,
     video: false,
     thinking: false,
     prompt_caching_hint: false,
@@ -75,24 +30,20 @@ function parseStoredCapabilitiesJson(raw) {
 }
 
 /**
- * Merge HF/stored capabilities with heuristics from provider + local model id.
- * Explicit booleans in `stored` win over inferred values.
+ * Normalize a stored capability object. Missing or non-boolean flags are off.
+ * @param {object|null} stored
+ * @returns {object}
  */
-function mergeWithStored(stored, inferred) {
-  const inf = inferred || inferModelCapabilities(null, null);
-  if (!stored || typeof stored !== 'object') {
-    return { ...inf };
+function storedCapabilities(stored) {
+  const flags = emptyCapabilityFlags();
+  if (!stored || typeof stored !== 'object') return flags;
+
+  for (const key of CAPABILITY_FLAG_KEYS) {
+    if (typeof stored[key] === 'boolean') flags[key] = stored[key];
   }
+
   return {
-    text: typeof stored.text === 'boolean' ? stored.text : inf.text,
-    vision: typeof stored.vision === 'boolean' ? stored.vision : inf.vision,
-    audio: typeof stored.audio === 'boolean' ? stored.audio : inf.audio,
-    video: typeof stored.video === 'boolean' ? stored.video : inf.video,
-    thinking: typeof stored.thinking === 'boolean' ? stored.thinking : inf.thinking,
-    prompt_caching_hint:
-      typeof stored.prompt_caching_hint === 'boolean'
-        ? stored.prompt_caching_hint
-        : inf.prompt_caching_hint,
+    ...flags,
     source: stored.source,
     repo_id: stored.repo_id,
     hf_repo_id: stored.hf_repo_id || stored.repo_id,
@@ -100,13 +51,15 @@ function mergeWithStored(stored, inferred) {
     pipeline_tag: stored.pipeline_tag,
     library_name: stored.library_name,
     tags_sample: stored.tags_sample,
+    hf_runtime_hints: stored.hf_runtime_hints,
+    openrouter_model_id: stored.openrouter_model_id,
+    openrouter_runtime_hints: stored.openrouter_runtime_hints,
   };
 }
 
 module.exports = {
-  inferModelCapabilities,
-  ollamaModelLikelySupportsAudio,
-  ollamaModelLikelySupportsVision,
+  CAPABILITY_FLAG_KEYS,
+  emptyCapabilityFlags,
   parseStoredCapabilitiesJson,
-  mergeWithStored,
+  storedCapabilities,
 };

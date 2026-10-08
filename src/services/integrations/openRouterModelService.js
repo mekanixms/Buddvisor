@@ -36,22 +36,16 @@ function mapOpenRouterModelToCapabilities(model) {
   const defaults =
     model.default_parameters && typeof model.default_parameters === 'object' ? model.default_parameters : null;
 
-  const idLower = String(model.id || '').toLowerCase();
-  const nameLower = String(model.name || '').toLowerCase();
-  const descLower = String(model.description || '').toLowerCase();
-
   const vision =
     outputModalities.includes('image') ||
     outputModalities.includes('images') ||
-    supportedParams.includes('images') ||
-    /\bvision\b|vl\b|multimodal|llava|pixtral|qwen.*vl|internvl|smolvlm/.test(idLower + ' ' + nameLower + ' ' + descLower);
+    supportedParams.includes('images');
 
   const audio =
     outputModalities.includes('audio') ||
-    supportedParams.includes('audio') ||
-    /\baudio\b|whisper|tts|speech/.test(idLower + ' ' + nameLower + ' ' + descLower);
+    supportedParams.includes('audio');
 
-  const text = outputModalities.includes('text') || (!vision && !audio);
+  const text = outputModalities.includes('text');
 
   const runtimeHints = {
     context_length: numOrNull(model.context_length),
@@ -65,7 +59,10 @@ function mapOpenRouterModelToCapabilities(model) {
     vision: !!vision,
     audio: !!audio,
     video: false,
-    thinking: /\breasoning\b|r1|o1|think/.test(idLower + ' ' + nameLower),
+    thinking:
+      supportedParams.includes('reasoning') ||
+      supportedParams.includes('include_reasoning') ||
+      outputModalities.includes('reasoning'),
     prompt_caching_hint: supportedParams.includes('prompt_cache') || supportedParams.includes('prompt_caching'),
     source: 'openrouter',
     openrouter_model_id: model.id || null,

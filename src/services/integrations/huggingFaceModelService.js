@@ -257,35 +257,29 @@ function mapApiToCapabilities(api, runtimeHints = null) {
   const pipeline = String(api.pipeline_tag || '').toLowerCase();
   const tags = (api.tags || []).map((t) => String(t).toLowerCase());
   const tagStr = tags.join(' ');
-  const idLower = String(api.id || '').toLowerCase();
 
   const vision =
     VISION_PIPELINES.has(pipeline) ||
     tagStr.includes('vision') ||
     tagStr.includes('image-to-text') ||
-    tagStr.includes('multimodal') ||
-    /\bvl\b|llava|pixtral|qwen2-vl|qwen3-vl|internvl|smolvlm|gemma/.test(idLower);
+    tagStr.includes('multimodal');
 
   const audio =
     AUDIO_PIPELINES.has(pipeline) ||
     tagStr.includes('whisper') ||
     tagStr.includes('speech') ||
-    tagStr.includes('audio') ||
-    /\bwhisper\b|wav2vec|speecht5/.test(idLower);
+    tagStr.includes('audio');
 
-  const video =
-    VIDEO_PIPELINES.has(pipeline) || tagStr.includes('video') || /video-llm|videollm/.test(idLower);
+  const video = VIDEO_PIPELINES.has(pipeline) || tagStr.includes('video');
 
   const text =
     TEXT_PIPELINES.has(pipeline) ||
     tagStr.includes('llm') ||
-    tagStr.includes('text-generation') ||
-    (!vision && !audio && !video);
+    tagStr.includes('text-generation');
 
   const thinking =
     tagStr.includes('reasoning') ||
-    tagStr.includes('chain-of-thought') ||
-    /qwq|deepseek-r1|\br1\b|o1|think|reasoning/.test(idLower);
+    tagStr.includes('chain-of-thought');
 
   const base = {
     text: !!text,

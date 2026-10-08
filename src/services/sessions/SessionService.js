@@ -7,9 +7,8 @@ const { toolRegistry } = require('../tools/ToolRegistry');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const {
-  inferModelCapabilities,
   parseStoredCapabilitiesJson,
-  mergeWithStored,
+  storedCapabilities,
 } = require('../../utils/modelCapabilities');
 
 // Orchestrator tools that are pre-assigned to new sessions. They remain ordinary
@@ -177,9 +176,8 @@ class SessionService {
           return {
             ...a,
             provider_config: safeConfig,
-            model_capabilities: mergeWithStored(
-              parseStoredCapabilitiesJson(a.model_capabilities),
-              inferModelCapabilities(a.provider_type, safeConfig.model)
+            model_capabilities: storedCapabilities(
+              parseStoredCapabilitiesJson(a.model_capabilities)
             ),
           };
         });
@@ -305,9 +303,8 @@ class SessionService {
         return {
           ...a,
           provider_config: safeConfig,
-          model_capabilities: mergeWithStored(
-            parseStoredCapabilitiesJson(a.model_capabilities),
-            inferModelCapabilities(a.provider_type, safeConfig.model)
+          model_capabilities: storedCapabilities(
+            parseStoredCapabilitiesJson(a.model_capabilities)
           ),
         };
       });
@@ -1165,7 +1162,10 @@ class SessionService {
   }
 
   /**
-   * Duplicate a session with all its settings
+   * Duplicate a session's configuration into a new empty conversation.
+   * Copies agents, each agent's session prompt, document and tool assignments
+   * (including configs), and orchestrator tools. Messages, schedules, Telegram,
+   * and the inbound webhook are left behind.
    * @param {number} sessionId - Session ID
    * @param {number} userId - User ID
    * @returns {Promise<object>} - Duplicated session
@@ -1184,12 +1184,15 @@ class SessionService {
         orchestrator_provider_config: originalSession.orchestrator_provider_config || {},
       });
 
-      // Update conversation mode settings (copy whether enabled or not)
-      await WorkSession.update(newSession.id, {
+      const sessionSettings = {
         conversation_mode_enabled: originalSession.conversation_mode_enabled || 0,
         conversation_max_rounds: originalSession.conversation_max_rounds || 10,
         conversation_token_budget: originalSession.conversation_token_budget || 50000,
-      });
+      };
+      if (['route', 'orchestrator_led'].includes(originalSession.orchestration_mode)) {
+        sessionSettings.orchestration_mode = originalSession.orchestration_mode;
+      }
+      await WorkSession.update(newSession.id, sessionSettings);
 
       await this.updateSession(newSession.id, userId, {
         decision_model_enabled: originalSession.decision_model_enabled ? 1 : 0,
@@ -1197,27 +1200,71 @@ class SessionService {
         decision_model_config: originalSession.decision_model_config || null,
       });
 
-      // Assign the same agents
+      // Assign the same agents, then their session-specific prompts
       if (originalSession.agents && originalSession.agents.length > 0) {
         const agentIds = originalSession.agents.map(a => a.id);
         logger.info(`Copying ${agentIds.length} agents to new session ${newSession.id}: ${agentIds.join(', ')}`);
         await this.assignAgents(newSession.id, userId, agentIds);
+
+        for (const agent of originalSession.agents) {
+          if (agent.session_context != null && agent.session_context !== '') {
+            await WorkSession.setAgentSessionContext(newSession.id, agent.id, agent.session_context);
+          }
+        }
       } else {
         logger.info(`No agents to copy from session ${sessionId}`);
       }
 
-      // Assign the same documents
-      if (originalSession.documents && originalSession.documents.length > 0) {
-        const documentIds = originalSession.documents.map(d => d.id);
+      const documentIds = (originalSession.documents || []).map(d => d.id);
+      const docRows = originalSession.document_agent_assignments || [];
+      if (docRows.length > 0) {
+        const byDoc = new Map();
+        for (const row of docRows) {
+          if (row.document_id == null || row.agent_id == null) continue;
+          if (!byDoc.has(row.document_id)) byDoc.set(row.document_id, []);
+          byDoc.get(row.document_id).push(row.agent_id);
+        }
+        const docAssignments = [...byDoc.entries()].map(([documentId, agentIds]) => ({
+          documentId,
+          agentIds,
+        }));
+        logger.info(`Copying ${documentIds.length} documents and ${docRows.length} per-agent document assignments to session ${newSession.id}`);
+        await this.setDocumentAgentAssignments(newSession.id, userId, docAssignments, documentIds);
+      } else if (documentIds.length > 0) {
         logger.info(`Copying ${documentIds.length} documents to new session ${newSession.id}: ${documentIds.join(', ')}`);
         await this.assignDocuments(newSession.id, userId, documentIds);
       } else {
         logger.info(`No documents to copy from session ${sessionId}`);
       }
 
+      const toolRows = originalSession.tool_agent_assignments || [];
+      if (toolRows.length > 0) {
+        const byTool = new Map();
+        for (const row of toolRows) {
+          if (!row.tool_name || row.agent_id == null) continue;
+          if (!byTool.has(row.tool_name)) {
+            byTool.set(row.tool_name, { toolName: row.tool_name, agentIds: [], toolConfigs: {} });
+          }
+          const entry = byTool.get(row.tool_name);
+          entry.agentIds.push(row.agent_id);
+          if (row.tool_config != null) {
+            entry.toolConfigs[row.agent_id] = row.tool_config;
+          }
+        }
+        logger.info(`Copying ${toolRows.length} agent tool assignments to session ${newSession.id}`);
+        await this.setToolAgentAssignments(newSession.id, userId, [...byTool.values()]);
+      }
+
+      // Replace the defaults createSession just wrote with the source session's set
+      await this.setOrchestratorToolAssignments(
+        newSession.id,
+        userId,
+        originalSession.orchestrator_tool_assignments || []
+      );
+
       logger.info(`Session duplicated: ${sessionId} -> ${newSession.id} (User: ${userId})`);
 
-      // Return complete session with agents and documents
+      // Return complete session with agents and documents. No messages are copied.
       const duplicatedSession = await this.getCompleteSession(newSession.id, userId);
       logger.info(`Duplicated session ${newSession.id} has ${duplicatedSession.agents?.length || 0} agents and ${duplicatedSession.documents?.length || 0} documents`);
       return duplicatedSession;

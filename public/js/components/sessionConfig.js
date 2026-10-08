@@ -1651,46 +1651,12 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
   }
 
   /**
-   * Best-effort model capability hint for UI display.
-   * Backend may also provide `agent.model_capabilities`.
+   * Capability flags saved on the agent (fetch or the agent editor checkboxes).
    */
   getModelCapabilities(agent) {
-    if (agent?.model_capabilities) return agent.model_capabilities;
-
-    const providerType = (agent?.provider_type || '').toLowerCase();
-    const model = (agent?.provider_config?.model || '').toLowerCase();
-
-    let vision = false;
-    if (providerType === 'openai') {
-      vision = model.includes('4o') || model.includes('vision');
-    } else if (providerType === 'xai') {
-      vision = model.includes('vision');
-    } else if (providerType === 'gemini') {
-      vision = true;
-    } else if (providerType === 'claude') {
-      vision = true;
-    } else if (providerType === 'ollama') {
-      vision =
-        model.includes('vl') ||
-        model.includes('vision') ||
-        model.includes('llava') ||
-        model.includes('moondream') ||
-        model.includes('gemma') ||
-        model.includes('minicpm-v') ||
-        model.includes('bakllava') ||
-        model.includes('cogvlm') ||
-        model.includes('pixtral') ||
-        model.includes('llama3.2-vision') ||
-        model.includes('granite3.2-vision');
-    } else if (providerType === 'kimi') {
-      vision = model.includes('k2');
-    }
-
-    const audio =
-      providerType === 'ollama' &&
-      (model.includes('gemma') || model.includes('qwen2-audio') || model.includes('qwen-audio'));
-
-    return { vision, audio, video: false, text: true, thinking: false, prompt_caching_hint: false };
+    const caps = agent?.model_capabilities;
+    if (caps && typeof caps === 'object') return caps;
+    return { vision: false, audio: false, video: false, text: false, thinking: false, prompt_caching_hint: false };
   }
 
   /**

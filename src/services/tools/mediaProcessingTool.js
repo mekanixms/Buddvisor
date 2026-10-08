@@ -100,11 +100,8 @@ function truncateString(value, maxChars) {
 }
 
 const {
-  inferModelCapabilities,
-  ollamaModelLikelySupportsAudio,
-  ollamaModelLikelySupportsVision,
   parseStoredCapabilitiesJson,
-  mergeWithStored,
+  storedCapabilities,
 } = require('../../utils/modelCapabilities');
 
 async function getAgentModelInfo(agentId) {
@@ -120,7 +117,6 @@ async function getAgentModelInfo(agentId) {
   }
 
   const model = config.model || null;
-  const inferred = inferModelCapabilities(agent.provider_type, model);
   const stored = parseStoredCapabilitiesJson(agent.model_capabilities);
   return {
     agentId: agent.id,
@@ -128,7 +124,7 @@ async function getAgentModelInfo(agentId) {
     providerType: agent.provider_type,
     model,
     baseURL: config.baseURL || null,
-    capabilities: mergeWithStored(stored, inferred),
+    capabilities: storedCapabilities(stored),
   };
 }
 
@@ -158,7 +154,7 @@ async function getOrchestratorModelInfo(sessionId) {
     providerType,
     model,
     baseURL: config.baseURL || null,
-    capabilities: inferModelCapabilities(providerType, model),
+    capabilities: storedCapabilities(null),
   };
 }
 
@@ -268,21 +264,14 @@ async function resolveVisionProvider(sessionId, callerAgentInfo, caps) {
  * Whether process_media should use the agent's Ollama model for audio (vs Whisper fallback).
  */
 function shouldUseOllamaAudio(agentInfo, caps) {
-  if (agentInfo?.providerType !== 'ollama') return false;
-  if (caps?.audio === true) return true;
-  if (ollamaModelLikelySupportsAudio(agentInfo?.model)) return true;
-  return false;
+  return agentInfo?.providerType === 'ollama' && caps?.audio === true;
 }
 
 /**
  * Whether process_media should use the agent's Ollama model for vision (vs OpenAI fallback).
  */
 function shouldUseOllamaVision(agentInfo, caps) {
-  if (agentInfo?.providerType !== 'ollama') return false;
-  if (caps?.vision === true) return true;
-  // Model-name heuristic wins over stale stored vision:false (e.g. Gemma 3 not tagged on HF).
-  if (ollamaModelLikelySupportsVision(agentInfo?.model)) return true;
-  return false;
+  return agentInfo?.providerType === 'ollama' && caps?.vision === true;
 }
 
 /**

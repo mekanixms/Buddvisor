@@ -101,7 +101,7 @@ class AgentService {
 
     const catalog = await AgentService.lookupOpenRouterChatModel(provider_type, cleanConfig.model);
     if (catalog.openrouter_model_id) openRouterId = catalog.openrouter_model_id;
-    if (catalog.model_capabilities) capabilitiesJson = catalog.model_capabilities;
+    if (catalog.model_capabilities && !capabilitiesJson) capabilitiesJson = catalog.model_capabilities;
 
     // Create agent
     const agent = await Agent.create({
@@ -337,7 +337,9 @@ class AgentService {
       chatModel
     );
     if (catalog.openrouter_model_id) updateData.openrouter_model_id = catalog.openrouter_model_id;
-    if (catalog.model_capabilities) updateData.model_capabilities = catalog.model_capabilities;
+    if (catalog.model_capabilities && updateData.model_capabilities == null) {
+      updateData.model_capabilities = catalog.model_capabilities;
+    }
 
     // Perform update
     const updatedAgent = await Agent.update(agentId, updateData);
