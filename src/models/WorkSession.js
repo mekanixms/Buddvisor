@@ -16,14 +16,28 @@ class WorkSession {
         context_length = 50,
         orchestrator_provider_type = 'claude',
         orchestrator_provider_config = null,
+        orchestrator_hf_model_repo = null,
+        orchestrator_openrouter_model_id = null,
+        orchestrator_model_capabilities = null,
       } = sessionData;
 
       const result = await dbRun(
         `INSERT INTO work_sessions (
           user_id, name, description, context_length,
-          orchestrator_provider_type, orchestrator_provider_config
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [user_id, name, description, context_length, orchestrator_provider_type, orchestrator_provider_config]
+          orchestrator_provider_type, orchestrator_provider_config,
+          orchestrator_hf_model_repo, orchestrator_openrouter_model_id, orchestrator_model_capabilities
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          user_id,
+          name,
+          description,
+          context_length,
+          orchestrator_provider_type,
+          orchestrator_provider_config,
+          orchestrator_hf_model_repo,
+          orchestrator_openrouter_model_id,
+          orchestrator_model_capabilities,
+        ]
       );
 
       logger.info(`Work session created: ${name} (ID: ${result.lastID})`);
@@ -121,6 +135,9 @@ class WorkSession {
         'context_length',
         'orchestrator_provider_type',
         'orchestrator_provider_config',
+        'orchestrator_hf_model_repo',
+        'orchestrator_openrouter_model_id',
+        'orchestrator_model_capabilities',
         'is_active',
         'inbound_webhook_enabled',
         'inbound_webhook_secret_hash',

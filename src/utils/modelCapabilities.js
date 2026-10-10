@@ -1,7 +1,7 @@
 /**
  * Stored model capability flags. Values come from a Hugging Face or OpenRouter
- * fetch, or from the checkboxes in the agent editor. Nothing is inferred from
- * the provider or model id.
+ * fetch, or from the checkboxes in the agent editor and Configure Session →
+ * Orchestrator. Nothing is inferred from the provider or model id.
  */
 
 const CAPABILITY_FLAG_KEYS = ['text', 'vision', 'audio', 'video', 'thinking', 'prompt_caching_hint'];

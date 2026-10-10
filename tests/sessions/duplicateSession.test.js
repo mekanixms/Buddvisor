@@ -30,6 +30,16 @@ describe('duplicateSession', () => {
     decision_model_enabled: 0,
     decision_model_provider: null,
     decision_model_config: null,
+    orchestrator_hf_model_repo: 'Qwen/Qwen2-VL-7B-Instruct',
+    orchestrator_openrouter_model_id: 'qwen/qwen2-vl-7b-instruct',
+    orchestrator_model_capabilities: {
+      text: true,
+      vision: true,
+      audio: false,
+      video: false,
+      thinking: true,
+      prompt_caching_hint: false,
+    },
     agents: [
       { id: 3, name: 'Analyst', session_context: 'agent three prompt' },
       { id: 4, name: 'Writer', session_context: null },
@@ -80,6 +90,9 @@ describe('duplicateSession', () => {
     expect(SessionService.createSession).toHaveBeenCalledWith(1, expect.objectContaining({
       name: 'Plan (Copy)',
       description: 'orchestrator prompt',
+      orchestrator_hf_model_repo: 'Qwen/Qwen2-VL-7B-Instruct',
+      orchestrator_openrouter_model_id: 'qwen/qwen2-vl-7b-instruct',
+      orchestrator_model_capabilities: expect.objectContaining({ vision: true, thinking: true }),
     }));
     expect(WorkSession.update).toHaveBeenCalledWith(20, expect.objectContaining({
       orchestration_mode: 'orchestrator_led',

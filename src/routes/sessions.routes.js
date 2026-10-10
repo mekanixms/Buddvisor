@@ -111,6 +111,9 @@ router.post('/', (req, res, next) => {
     .optional()
     .isObject()
     .withMessage('Provider config must be an object'),
+  body('orchestrator_hf_model_repo').optional({ nullable: true }).isString().isLength({ max: 240 }),
+  body('orchestrator_openrouter_model_id').optional({ nullable: true }).isString().isLength({ max: 240 }),
+  body('orchestrator_model_capabilities').optional({ nullable: true }),
   validate
 ], async (req, res, next) => {
   try {
@@ -322,6 +325,9 @@ router.put('/:id', [
     .optional()
     .isObject()
     .withMessage('Provider config must be an object'),
+  body('orchestrator_hf_model_repo').optional({ nullable: true }).isString().isLength({ max: 240 }),
+  body('orchestrator_openrouter_model_id').optional({ nullable: true }).isString().isLength({ max: 240 }),
+  body('orchestrator_model_capabilities').optional({ nullable: true }),
   body('is_active')
     .optional()
     .isBoolean()

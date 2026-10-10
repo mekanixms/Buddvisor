@@ -148,13 +148,14 @@ async function getOrchestratorModelInfo(sessionId) {
 
   const providerType = session.orchestrator_provider_type || 'claude';
   const model = config.model || null;
+  const stored = parseStoredCapabilitiesJson(session.orchestrator_model_capabilities);
   return {
     agentId: null,
     agentName: 'Orchestrator',
     providerType,
     model,
     baseURL: config.baseURL || null,
-    capabilities: storedCapabilities(null),
+    capabilities: storedCapabilities(stored),
   };
 }
 
@@ -690,7 +691,7 @@ function registerMediaProcessingTool() {
           vision?.metadata?.error
             ? `Vision fallback error: ${vision.metadata.error}`
             : caps && caps.vision === false && !shouldUseOllamaVision(agentInfo, caps)
-              ? 'Note: this agent model appears text-only; media understanding is being performed via the tool.'
+              ? 'Note: this model appears text-only; media understanding is being performed via the tool.'
               : null;
 
         const imagePayload = {
@@ -784,7 +785,7 @@ function registerMediaProcessingTool() {
 
           const warning =
             caps && caps.vision === false && !shouldUseOllamaVision(agentInfo, caps)
-              ? 'Note: this agent model appears text-only; video frame understanding is being performed via the tool.'
+              ? 'Note: this model appears text-only; video frame understanding is being performed via the tool.'
               : null;
 
           const videoPayload = {
@@ -982,5 +983,5 @@ async function getProcessedMediaCacheInfo(sessionId, agentId) {
   }
 }
 
-module.exports = { registerMediaProcessingTool, getProcessedMediaCacheInfo };
+module.exports = { registerMediaProcessingTool, getProcessedMediaCacheInfo, getOrchestratorModelInfo };
 

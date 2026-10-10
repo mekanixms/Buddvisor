@@ -135,6 +135,11 @@ class SessionConfig {
       ? decisionModel
       : null;
     const routerMode = (this.currentSession.orchestration_mode || 'route') === 'route';
+    const savedOrchestratorCaps = this.asCapabilityObject(this.currentSession.orchestrator_model_capabilities);
+    this._clearOrchHfMetadata = false;
+    this._clearOrchOpenRouterMetadata = false;
+    this._pendingOrchHfCapabilities = savedOrchestratorCaps ? { ...savedOrchestratorCaps } : null;
+    this._pendingOrchOpenRouterCapabilities = savedOrchestratorCaps ? { ...savedOrchestratorCaps } : null;
 
     // Get all available agents
     const availableAgents = window.agentManager?.getAgents() || [];
@@ -829,6 +834,48 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                       <div class="form-text text-muted">Reduces cost per million tokens when the model caches repeated context. Disable if you see API errors.</div>
                     </div>
 
+                    <div class="alert alert-info small py-2 mb-3">
+                      <div id="orchestrator-capabilities-body"></div>
+                    </div>
+
+                    <div class="mb-3 p-2 rounded border bg-light">
+                      <label class="form-label mb-1" for="orch-hf-repo">Hugging Face model (optional)</label>
+                      <div class="input-group input-group-sm mb-1">
+                        <input type="text" class="form-control" id="orch-hf-repo"
+                          placeholder="org/model or paste a model page URL"
+                          value="${escapeHtml(this.currentSession.orchestrator_hf_model_repo || '')}"
+                          autocomplete="off">
+                        <button type="button" class="btn btn-outline-primary" data-action="fetch-orchestrator-hf" title="Load metadata from Hugging Face Hub API">
+                          Fetch
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" data-action="clear-orchestrator-hf" title="Clear saved HF metadata">
+                          Clear
+                        </button>
+                      </div>
+                      <div class="form-text text-muted mb-0">
+                        Uses the public Hub API. Set <code>HUGGINGFACE_API_KEY</code> on the server for private or gated models. <strong>Fetch</strong> checks the boxes above from the Hub tags.
+                      </div>
+                    </div>
+
+                    <div class="mb-3 p-2 rounded border bg-light">
+                      <label class="form-label mb-1" for="orch-openrouter-model">OpenRouter model (optional)</label>
+                      <div class="input-group input-group-sm mb-1">
+                        <input type="text" class="form-control" id="orch-openrouter-model"
+                          placeholder="author/slug (e.g. google/gemini-2.5-pro)"
+                          value="${escapeHtml(this.currentSession.orchestrator_openrouter_model_id || '')}"
+                          autocomplete="off">
+                        <button type="button" class="btn btn-outline-primary" data-action="fetch-orchestrator-openrouter" title="Load metadata from OpenRouter model catalog">
+                          Fetch
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" data-action="clear-orchestrator-openrouter" title="Clear saved OpenRouter metadata">
+                          Clear
+                        </button>
+                      </div>
+                      <div class="form-text text-muted mb-0">
+                        Uses OpenRouter’s public model catalog. When the orchestrator provider is OpenRouter, saving stores the model selected above. Otherwise this id is only catalog metadata. <strong>Fetch</strong> checks the boxes above.
+                      </div>
+                    </div>
+
                     <div id="decision-model-section" class="${routerMode ? '' : 'd-none'}">
                       <hr>
                       <h6 class="mb-3">Decision model</h6>
@@ -1009,6 +1056,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
 
     // Update custom model display if set
     this.updateCustomOrchestratorModelDisplay();
+    this.refreshOrchestratorCapabilities();
 
     // Update tool resource path displays (local_working_folder, sqlite_local_db)
     this.updateAllToolResourcePathDisplays();
@@ -1648,6 +1696,234 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       custom: 'Custom Agent',
     };
     return roles[roleId] || roleId.charAt(0).toUpperCase() + roleId.slice(1);
+  }
+
+  static ORCHESTRATOR_CAPABILITY_FLAGS = [
+    ['text', 'text'],
+    ['vision', 'vision'],
+    ['audio', 'audio'],
+    ['video', 'video'],
+    ['thinking', 'thinking'],
+    ['prompt_caching_hint', 'prompt cache'],
+  ];
+
+  asCapabilityObject(value) {
+    if (!value) return null;
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  flagsFromOrchestratorCapabilities(caps) {
+    const flags = {};
+    for (const [key] of SessionConfig.ORCHESTRATOR_CAPABILITY_FLAGS) {
+      flags[key] = !!(caps && caps[key]);
+    }
+    return flags;
+  }
+
+  readOrchestratorCapabilityChecks() {
+    if (!document.getElementById('orch-cap-text')) return null;
+    const flags = {};
+    for (const [key] of SessionConfig.ORCHESTRATOR_CAPABILITY_FLAGS) {
+      flags[key] = !!document.getElementById(`orch-cap-${key}`)?.checked;
+    }
+    return flags;
+  }
+
+  combineOrchestratorCapabilities(hfCaps, orCaps) {
+    const a = hfCaps && typeof hfCaps === 'object' ? hfCaps : null;
+    const b = orCaps && typeof orCaps === 'object' ? orCaps : null;
+    if (!a && !b) return null;
+    if (a && !b) return { ...a };
+    if (b && !a) return { ...b };
+
+    const merged = { ...a, ...b };
+    for (const key of ['text', 'vision', 'audio', 'video', 'thinking', 'prompt_caching_hint']) {
+      merged[key] = !!(a?.[key] || b?.[key]);
+    }
+    merged.source = 'merged';
+    merged.fetched_at = new Date().toISOString();
+    return merged;
+  }
+
+  /**
+   * Capability checkboxes and catalog metadata for the session orchestrator.
+   * @param {object} [flagOverride] - When set (after a fetch), these replace the checkbox state.
+   */
+  refreshOrchestratorCapabilities(flagOverride) {
+    const body = document.getElementById('orchestrator-capabilities-body');
+    if (!body) return;
+
+    const hf = this._clearOrchHfMetadata ? null : this._pendingOrchHfCapabilities;
+    const orCaps = this._clearOrchOpenRouterMetadata ? null : this._pendingOrchOpenRouterCapabilities;
+    const flags = flagOverride
+      || this.readOrchestratorCapabilityChecks()
+      || this.flagsFromOrchestratorCapabilities(orCaps || hf);
+
+    const boxes = SessionConfig.ORCHESTRATOR_CAPABILITY_FLAGS.map(([key, label]) => `
+      <div class="form-check form-check-inline mb-1">
+        <input class="form-check-input" type="checkbox" id="orch-cap-${key}" ${flags[key] ? 'checked' : ''}>
+        <label class="form-check-label" for="orch-cap-${key}">${escapeHtml(label)}</label>
+      </div>
+    `).join('');
+
+    const hfMeta = hf && (hf.repo_id || hf.pipeline_tag || hf.library_name)
+      ? {
+        repo_id: hf.repo_id,
+        pipeline_tag: hf.pipeline_tag,
+        library_name: hf.library_name,
+        fetched_at: hf.fetched_at,
+      }
+      : null;
+
+    const hfBlock = hfMeta
+      ? `
+        <div class="small mt-2 pt-2 border-top border-info-subtle">
+          <strong class="d-block mb-1">Hugging Face metadata</strong>
+          ${hfMeta.repo_id ? `<div><span class="text-muted">Repo:</span> ${escapeHtml(hfMeta.repo_id)}</div>` : ''}
+          ${hfMeta.pipeline_tag ? `<div><span class="text-muted">Pipeline:</span> ${escapeHtml(hfMeta.pipeline_tag)}</div>` : ''}
+          ${hfMeta.library_name ? `<div><span class="text-muted">Library:</span> ${escapeHtml(hfMeta.library_name)}</div>` : ''}
+          ${hfMeta.fetched_at ? `<div class="text-muted" style="font-size: 0.75rem;">Fetched: ${escapeHtml(hfMeta.fetched_at)}</div>` : ''}
+        </div>
+      `
+      : `<div class="small text-muted mt-1 mb-0">No Hugging Face metadata yet. Enter a repo below and click <strong>Fetch</strong> to set the checkboxes from Hub tags.</div>`;
+
+    let orBlock = '';
+    if (orCaps && orCaps.openrouter_model_id) {
+      const hints = orCaps.openrouter_runtime_hints;
+      const rows = [];
+      if (hints && typeof hints === 'object') {
+        if (hints.context_length != null) {
+          rows.push(`<tr><td class="text-muted pe-2">Context length</td><td>${escapeHtml(String(hints.context_length))}</td></tr>`);
+        }
+        if (Array.isArray(hints.output_modalities) && hints.output_modalities.length) {
+          rows.push(`<tr><td class="text-muted pe-2">Modalities</td><td>${escapeHtml(hints.output_modalities.join(', '))}</td></tr>`);
+        }
+      }
+      orBlock = `
+        <div class="small mt-2 pt-2 border-top border-info-subtle">
+          <strong class="d-block mb-1">OpenRouter metadata</strong>
+          <div><span class="text-muted">Model:</span> ${escapeHtml(String(orCaps.openrouter_model_id))}</div>
+          ${rows.length ? `<table class="table table-sm table-borderless mb-0" style="font-size: 0.8rem;"><tbody>${rows.join('')}</tbody></table>` : ''}
+        </div>
+      `;
+    } else {
+      orBlock = `<div class="small text-muted mt-1 mb-0">No OpenRouter metadata yet. Enter a model id below and click <strong>Fetch</strong> to load catalog info.</div>`;
+    }
+
+    body.innerHTML = `
+      <div class="fw-semibold mb-1"><i class="bi bi-cpu me-1"></i>Model capabilities</div>
+      <div>${boxes}</div>
+      ${hfBlock}
+      ${orBlock}
+      <div class="small text-muted mt-1 mb-0">A Hugging Face or OpenRouter fetch checks these. You can change them before saving. <code>process_media</code> uses vision and audio to decide whether this orchestrator model can handle images and audio.</div>
+    `;
+  }
+
+  orchestratorCapabilityPayload() {
+    const capabilityFlags = this.readOrchestratorCapabilityChecks()
+      || this.flagsFromOrchestratorCapabilities(null);
+    const combinedCaps = this.combineOrchestratorCapabilities(
+      this._clearOrchHfMetadata ? null : this._pendingOrchHfCapabilities,
+      this._clearOrchOpenRouterMetadata ? null : this._pendingOrchOpenRouterCapabilities
+    ) || { source: 'manual' };
+    for (const [key] of SessionConfig.ORCHESTRATOR_CAPABILITY_FLAGS) {
+      combinedCaps[key] = !!capabilityFlags[key];
+    }
+
+    const payload = { orchestrator_model_capabilities: combinedCaps };
+    if (this._clearOrchHfMetadata) {
+      payload.orchestrator_hf_model_repo = null;
+    } else {
+      const hfRepoVal = document.getElementById('orch-hf-repo')?.value?.trim() || '';
+      if (this._pendingOrchHfCapabilities) {
+        payload.orchestrator_hf_model_repo = hfRepoVal || this._pendingOrchHfCapabilities.repo_id || null;
+      } else if (hfRepoVal) {
+        payload.orchestrator_hf_model_repo = hfRepoVal;
+      }
+    }
+
+    if (this._clearOrchOpenRouterMetadata) {
+      payload.orchestrator_openrouter_model_id = null;
+    } else {
+      const orVal = document.getElementById('orch-openrouter-model')?.value?.trim() || '';
+      if (this._pendingOrchOpenRouterCapabilities) {
+        payload.orchestrator_openrouter_model_id = orVal || this._pendingOrchOpenRouterCapabilities.openrouter_model_id || null;
+      } else if (orVal) {
+        payload.orchestrator_openrouter_model_id = orVal;
+      }
+    }
+    return payload;
+  }
+
+  async fetchOrchestratorHfModel() {
+    const input = document.getElementById('orch-hf-repo');
+    const repo = (input?.value || '').trim();
+    if (!repo) {
+      showToast('Enter a Hugging Face model id (org/model) or URL', 'warning');
+      return;
+    }
+    try {
+      showToast('Fetching from Hugging Face…', 'info');
+      const res = await api.agents.fetchHuggingFaceModel(repo);
+      const caps = res.data?.capabilities;
+      if (!caps) throw new Error('Invalid response from server');
+      this._pendingOrchHfCapabilities = caps;
+      this._clearOrchHfMetadata = false;
+      if (input && caps.repo_id) input.value = caps.repo_id;
+      this.refreshOrchestratorCapabilities(this.flagsFromOrchestratorCapabilities(caps));
+      showToast('Hugging Face metadata loaded', 'success');
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || 'Failed to fetch from Hugging Face', 'danger');
+    }
+  }
+
+  clearOrchestratorHfModel() {
+    const input = document.getElementById('orch-hf-repo');
+    if (input) input.value = '';
+    this._pendingOrchHfCapabilities = null;
+    this._clearOrchHfMetadata = true;
+    this.refreshOrchestratorCapabilities();
+  }
+
+  async fetchOrchestratorOpenRouterModel() {
+    const input = document.getElementById('orch-openrouter-model');
+    const modelId = (input?.value || '').trim();
+    if (!modelId) {
+      showToast('Enter an OpenRouter model id (author/slug)', 'warning');
+      return;
+    }
+    try {
+      showToast('Fetching from OpenRouter…', 'info');
+      const res = await api.agents.fetchOpenRouterModel(modelId);
+      const caps = res.data?.capabilities;
+      if (!caps) throw new Error('Invalid response from server');
+      this._pendingOrchOpenRouterCapabilities = caps;
+      this._clearOrchOpenRouterMetadata = false;
+      if (input && caps.openrouter_model_id) input.value = caps.openrouter_model_id;
+      this.refreshOrchestratorCapabilities(this.flagsFromOrchestratorCapabilities(caps));
+      showToast('OpenRouter metadata loaded', 'success');
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || 'Failed to fetch from OpenRouter', 'danger');
+    }
+  }
+
+  clearOrchestratorOpenRouterModel() {
+    const input = document.getElementById('orch-openrouter-model');
+    if (input) input.value = '';
+    this._pendingOrchOpenRouterCapabilities = null;
+    this._clearOrchOpenRouterMetadata = true;
+    this.refreshOrchestratorCapabilities();
   }
 
   /**
@@ -2793,6 +3069,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         decision_model_enabled: decisionEnabled ? 1 : 0,
         decision_model_provider: decisionProvider,
         decision_model_config: decisionConfig,
+        ...this.orchestratorCapabilityPayload(),
       });
 
       // Get selected agents
@@ -3102,6 +3379,22 @@ document.addEventListener('click', (e) => {
       break;
     case 'test-ollama-connection':
       sessionConfig.testOllamaConnection();
+      break;
+    case 'fetch-orchestrator-hf':
+      e.preventDefault();
+      sessionConfig.fetchOrchestratorHfModel();
+      break;
+    case 'clear-orchestrator-hf':
+      e.preventDefault();
+      sessionConfig.clearOrchestratorHfModel();
+      break;
+    case 'fetch-orchestrator-openrouter':
+      e.preventDefault();
+      sessionConfig.fetchOrchestratorOpenRouterModel();
+      break;
+    case 'clear-orchestrator-openrouter':
+      e.preventDefault();
+      sessionConfig.clearOrchestratorOpenRouterModel();
       break;
     case 'telegram-connect':
       sessionConfig.connectTelegram();

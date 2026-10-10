@@ -6,10 +6,107 @@ const { syncSessionStorageLinks } = require('./SessionStorageLinks');
 const { toolRegistry } = require('../tools/ToolRegistry');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
+const AgentService = require('../agents/AgentService');
 const {
   parseStoredCapabilitiesJson,
   storedCapabilities,
 } = require('../../utils/modelCapabilities');
+
+function nullableText(value, maxLen, label) {
+  if (value == null || value === '') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (text.length > maxLen) throw new Error(`${label} is too long`);
+  return text;
+}
+
+function serializeOrchestratorCapabilities(value) {
+  if (value == null) return null;
+  let json;
+  if (typeof value === 'string') {
+    JSON.parse(value);
+    json = value;
+  } else if (typeof value === 'object' && !Array.isArray(value)) {
+    json = JSON.stringify(value);
+  } else {
+    throw new Error('orchestrator_model_capabilities must be an object');
+  }
+  if (json.length > 32768) {
+    throw new Error('orchestrator_model_capabilities JSON is too large');
+  }
+  return json;
+}
+
+function orchestratorCapabilitiesForClient(raw) {
+  const parsed = parseStoredCapabilitiesJson(raw);
+  if (!parsed) return null;
+  return storedCapabilities(parsed);
+}
+
+function applyOrchestratorCapabilities(session) {
+  if (!session || !Object.prototype.hasOwnProperty.call(session, 'orchestrator_model_capabilities')) {
+    return session;
+  }
+  session.orchestrator_model_capabilities = orchestratorCapabilitiesForClient(
+    session.orchestrator_model_capabilities
+  );
+  return session;
+}
+
+function chatModelFromProviderConfig(providerConfig) {
+  if (!providerConfig) return null;
+  if (typeof providerConfig === 'object') return providerConfig.model || null;
+  try {
+    return JSON.parse(decrypt(providerConfig)).model || null;
+  } catch {
+    return null;
+  }
+}
+
+function touchesOrchestratorModel(source) {
+  return source.orchestrator_provider_type !== undefined
+    || source.orchestrator_provider_config !== undefined
+    || source.orchestrator_hf_model_repo !== undefined
+    || source.orchestrator_openrouter_model_id !== undefined
+    || source.orchestrator_model_capabilities !== undefined;
+}
+
+/**
+ * Copy orchestrator capability fields onto `fields`.
+ * When the orchestrator provider is OpenRouter, the chat model id is stored.
+ * Catalog flags fill in only when this update did not send capabilities.
+ * Updates that do not touch the orchestrator model leave stored flags alone.
+ */
+async function fillOrchestratorCapabilityFields(fields, source, providerType, model) {
+  if (source.orchestrator_hf_model_repo !== undefined) {
+    fields.orchestrator_hf_model_repo = nullableText(
+      source.orchestrator_hf_model_repo,
+      240,
+      'orchestrator_hf_model_repo'
+    );
+  }
+  if (source.orchestrator_openrouter_model_id !== undefined) {
+    fields.orchestrator_openrouter_model_id = nullableText(
+      source.orchestrator_openrouter_model_id,
+      240,
+      'orchestrator_openrouter_model_id'
+    );
+  }
+  if (source.orchestrator_model_capabilities !== undefined) {
+    fields.orchestrator_model_capabilities = serializeOrchestratorCapabilities(
+      source.orchestrator_model_capabilities
+    );
+  }
+  if (!touchesOrchestratorModel(source)) return;
+
+  const catalog = await AgentService.lookupOpenRouterChatModel(providerType, model);
+  if (catalog.openrouter_model_id) {
+    fields.orchestrator_openrouter_model_id = catalog.openrouter_model_id;
+  }
+  if (catalog.model_capabilities && source.orchestrator_model_capabilities === undefined) {
+    fields.orchestrator_model_capabilities = catalog.model_capabilities;
+  }
+}
 
 // Orchestrator tools that are pre-assigned to new sessions. They remain ordinary
 // assignments, so the user can untick them in Configure Session → Tools.
@@ -42,6 +139,18 @@ class SessionService {
         orchestrator_provider_config = {},
       } = sessionData;
 
+      const capabilityFields = {
+        orchestrator_hf_model_repo: null,
+        orchestrator_openrouter_model_id: null,
+        orchestrator_model_capabilities: null,
+      };
+      await fillOrchestratorCapabilityFields(
+        capabilityFields,
+        sessionData,
+        orchestrator_provider_type,
+        orchestrator_provider_config?.model
+      );
+
       // Validate required fields
       if (!name || name.trim().length === 0) {
         throw new Error('Session name is required');
@@ -64,6 +173,9 @@ class SessionService {
         context_length,
         orchestrator_provider_type,
         orchestrator_provider_config: encryptedConfig,
+        orchestrator_hf_model_repo: capabilityFields.orchestrator_hf_model_repo,
+        orchestrator_openrouter_model_id: capabilityFields.orchestrator_openrouter_model_id,
+        orchestrator_model_capabilities: capabilityFields.orchestrator_model_capabilities,
       });
 
       const defaultTools = DEFAULT_ORCHESTRATOR_TOOLS.filter((toolName) => toolRegistry.has(toolName));
@@ -76,7 +188,7 @@ class SessionService {
 
       logger.info(`Session created: ${name} (User: ${userId})`);
 
-      return session;
+      return applyOrchestratorCapabilities(session);
     } catch (error) {
       logger.error('Error creating session:', error);
       throw error;
@@ -154,6 +266,8 @@ class SessionService {
           session.decision_model_config = null;
         }
       }
+
+      applyOrchestratorCapabilities(session);
 
       // Sanitize agent provider configs for UI (no API keys)
       if (Array.isArray(session.agents)) {
@@ -284,6 +398,8 @@ class SessionService {
         full.orchestrator_provider_config = null;
       }
     }
+
+    applyOrchestratorCapabilities(full);
 
     if (Array.isArray(full.agents)) {
       full.agents = full.agents.map((a) => {
@@ -477,6 +593,14 @@ class SessionService {
         }
       }
 
+      const providerType = updates.orchestrator_provider_type !== undefined
+        ? updates.orchestrator_provider_type
+        : session.orchestrator_provider_type;
+      const chatModel = updates.orchestrator_provider_config !== undefined
+        ? chatModelFromProviderConfig(updates.orchestrator_provider_config)
+        : chatModelFromProviderConfig(session.orchestrator_provider_config);
+      await fillOrchestratorCapabilityFields(allowedUpdates, updates, providerType, chatModel);
+
       if (updates.is_active !== undefined) {
         allowedUpdates.is_active = updates.is_active ? 1 : 0;
       }
@@ -542,7 +666,9 @@ class SessionService {
       const nameChanged =
         allowedUpdates.name !== undefined && allowedUpdates.name !== session.name;
 
-      const updatedSession = await WorkSession.update(sessionId, allowedUpdates);
+      const updatedSession = applyOrchestratorCapabilities(
+        await WorkSession.update(sessionId, allowedUpdates)
+      );
 
       if (nameChanged) {
         await syncSessionStorageLinks(sessionId);
@@ -875,6 +1001,9 @@ class SessionService {
           context_length: session.context_length,
           orchestrator_provider_type: session.orchestrator_provider_type,
           orchestrator_provider_config: session.orchestrator_provider_config,
+          orchestrator_hf_model_repo: session.orchestrator_hf_model_repo || null,
+          orchestrator_openrouter_model_id: session.orchestrator_openrouter_model_id || null,
+          orchestrator_model_capabilities: session.orchestrator_model_capabilities || null,
           conversation_mode_enabled: session.conversation_mode_enabled || false,
           conversation_max_rounds: session.conversation_max_rounds || 10,
           conversation_token_budget: session.conversation_token_budget || 50000,
@@ -966,6 +1095,9 @@ class SessionService {
         context_length: importData.session.context_length || 50,
         orchestrator_provider_type: importData.session.orchestrator_provider_type || 'claude',
         orchestrator_provider_config: importData.session.orchestrator_provider_config || {},
+        orchestrator_hf_model_repo: importData.session.orchestrator_hf_model_repo,
+        orchestrator_openrouter_model_id: importData.session.orchestrator_openrouter_model_id,
+        orchestrator_model_capabilities: importData.session.orchestrator_model_capabilities,
       });
 
       // Update conversation mode settings if present
@@ -1182,6 +1314,9 @@ class SessionService {
         context_length: originalSession.context_length,
         orchestrator_provider_type: originalSession.orchestrator_provider_type,
         orchestrator_provider_config: originalSession.orchestrator_provider_config || {},
+        orchestrator_hf_model_repo: originalSession.orchestrator_hf_model_repo || null,
+        orchestrator_openrouter_model_id: originalSession.orchestrator_openrouter_model_id || null,
+        orchestrator_model_capabilities: originalSession.orchestrator_model_capabilities || null,
       });
 
       const sessionSettings = {
