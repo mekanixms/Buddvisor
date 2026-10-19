@@ -1,4 +1,4 @@
-const { computeNextRunAt } = require('../../src/services/scheduler/SchedulerService');
+const { computeNextRunAt, nextRunWhenEnabling } = require('../../src/services/scheduler/SchedulerService');
 
 describe('computeNextRunAt', () => {
   it('uses the cron expression instead of adding one hour', () => {
@@ -42,5 +42,41 @@ describe('computeNextRunAt', () => {
       after.toISOString()
     );
     expect(next).toBe(new Date(after.getTime() + 60 * 60 * 1000).toISOString());
+  });
+});
+
+describe('nextRunWhenEnabling', () => {
+  const now = new Date(2026, 9, 19, 8, 0, 0);
+
+  it('keeps a next run that is still in the future', () => {
+    const future = new Date(2026, 9, 19, 21, 30, 0).toISOString();
+    expect(nextRunWhenEnabling({
+      schedule_type: 'cron',
+      schedule_value: '30 21 * * *',
+      next_run_at: future,
+    }, now)).toBe(future);
+  });
+
+  it('moves an overdue cron to the next occurrence after now', () => {
+    const next = new Date(nextRunWhenEnabling({
+      id: 3,
+      schedule_type: 'cron',
+      schedule_value: '30 21 * * *',
+      next_run_at: new Date(2026, 9, 1, 21, 30, 0).toISOString(),
+    }, now));
+    expect(next.getTime()).toBeGreaterThan(now.getTime());
+    expect(next.getHours()).toBe(21);
+    expect(next.getMinutes()).toBe(30);
+    expect(next.getDate()).toBe(19);
+  });
+
+  it('schedules an overdue interval one period from now', () => {
+    const next = nextRunWhenEnabling({
+      schedule_type: 'interval',
+      schedule_value: '90',
+      last_run_at: new Date(2026, 9, 1, 8, 0, 0).toISOString(),
+      next_run_at: new Date(2026, 9, 1, 8, 1, 30).toISOString(),
+    }, now);
+    expect(next).toBe(new Date(now.getTime() + 90 * 1000).toISOString());
   });
 });

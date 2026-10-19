@@ -7,6 +7,7 @@ const { toolRegistry } = require('../tools/ToolRegistry');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const AgentService = require('../agents/AgentService');
+const LlamaCppProvider = require('../../providers/LlamaCppProvider');
 const {
   parseStoredCapabilitiesJson,
   storedCapabilities,
@@ -162,6 +163,9 @@ class SessionService {
 
       // Encrypt orchestrator config if it contains sensitive data
       let encryptedConfig = null;
+      if (orchestrator_provider_type === 'llamacpp' && orchestrator_provider_config) {
+        LlamaCppProvider.applyAlias(orchestrator_provider_config);
+      }
       if (orchestrator_provider_config && Object.keys(orchestrator_provider_config).length > 0) {
         encryptedConfig = encrypt(JSON.stringify(orchestrator_provider_config));
       }
@@ -584,6 +588,12 @@ class SessionService {
       }
 
       if (updates.orchestrator_provider_config !== undefined) {
+        const orchestratorType = updates.orchestrator_provider_type !== undefined
+          ? updates.orchestrator_provider_type
+          : session.orchestrator_provider_type;
+        if (orchestratorType === 'llamacpp' && updates.orchestrator_provider_config) {
+          LlamaCppProvider.applyAlias(updates.orchestrator_provider_config);
+        }
         if (updates.orchestrator_provider_config && Object.keys(updates.orchestrator_provider_config).length > 0) {
           allowedUpdates.orchestrator_provider_config = encrypt(
             JSON.stringify(updates.orchestrator_provider_config)

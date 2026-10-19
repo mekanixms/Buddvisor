@@ -8,9 +8,10 @@ const fs = require('fs');
 const { toolRegistry } = require('./ToolRegistry');
 const logger = require('../../utils/logger');
 const { dbAll } = require('../../../config/database');
+const WorkSession = require('../../models/WorkSession');
 const { getWorkspacePath, resolveWorkspacePath } = require('./localWorkingFolderTool');
 const { terminalManager, TerminalManager } = require('./terminal/TerminalManager');
-const { TerminalLog } = require('./terminal/TerminalLog');
+const { TerminalLog, formatTerminalTranscript } = require('./terminal/TerminalLog');
 const { isInside } = require('./terminal/sandbox');
 
 const SUPPORTED_PLATFORMS = new Set(['linux', 'darwin']);
@@ -288,4 +289,67 @@ function closeAllTerminals() {
   terminalManager.closeAll();
 }
 
-module.exports = { registerTerminalTool, closeAllTerminals, handleTerminal };
+/**
+ * Live terminal sessions for a work session, for the chat dialog.
+ * `enabled` is true when the terminal tool is assigned to the orchestrator or any agent.
+ */
+async function listTerminalSessionsForSession(sessionId) {
+  const [agentRows, orchestratorRows, agents] = await Promise.all([
+    dbAll(
+      'SELECT DISTINCT agent_id FROM session_agent_tools WHERE session_id = ? AND tool_name = ?',
+      [sessionId, 'terminal']
+    ),
+    dbAll(
+      'SELECT 1 AS ok FROM session_orchestrator_tools WHERE session_id = ? AND tool_name = ? LIMIT 1',
+      [sessionId, 'terminal']
+    ),
+    WorkSession.getAgents(sessionId),
+  ]);
+  const enabled = (agentRows && agentRows.length > 0) || (orchestratorRows && orchestratorRows.length > 0);
+  if (!enabled) return { enabled: false, sessions: [] };
+
+  const names = new Map((agents || []).map((agent) => [Number(agent.id), agent.name]));
+  const sessions = terminalManager.listForWorkSession(sessionId).map((row) => ({
+    ...row,
+    owner_name: row.owner === 'orchestrator'
+      ? 'Orchestrator'
+      : (names.get(Number(row.owner)) || `Agent ${row.owner}`),
+  }));
+  return { enabled: true, sessions };
+}
+
+/**
+ * Recent output of one live terminal, read from its log so the agent's unread buffer stays intact.
+ * Returns null when that shell is not open. enabled is false when the tool is not assigned.
+ */
+async function getTerminalTranscript(sessionId, owner, name) {
+  const safeName = TerminalManager.validateName(String(name || ''));
+  const listing = await listTerminalSessionsForSession(sessionId);
+  if (!listing.enabled) return { enabled: false, output: '' };
+
+  const ownerKey = owner === 'orchestrator' ? 'orchestrator' : Number(owner);
+  const row = listing.sessions.find((item) => item.session === safeName && String(item.owner) === String(ownerKey));
+  if (!row) return null;
+
+  const session = terminalManager.get(`${sessionId}:${ownerKey}`, safeName);
+  if (!session) return null;
+
+  const raw = session.log ? session.log.tail({ lines: 300, session: safeName }) : '';
+  return {
+    enabled: true,
+    owner: row.owner,
+    owner_name: row.owner_name,
+    session: safeName,
+    state: session.state,
+    cwd: row.cwd || null,
+    output: formatTerminalTranscript(raw, safeName),
+  };
+}
+
+module.exports = {
+  registerTerminalTool,
+  closeAllTerminals,
+  handleTerminal,
+  listTerminalSessionsForSession,
+  getTerminalTranscript,
+};

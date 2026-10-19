@@ -287,6 +287,10 @@
                                                 data-action="show-session-pool-dump" title="Session pool (shared agent memory)">
                                             <i class="bi bi-database" style="font-size: 1.1rem;"></i>
                                         </button>
+                                        <button type="button" class="btn btn-link btn-sm p-0 text-muted d-none" id="terminal-sessions-btn"
+                                                data-action="show-terminal-sessions" title="Terminal sessions">
+                                            <i class="bi bi-terminal" style="font-size: 1.1rem;"></i>
+                                        </button>
                                         <button type="button" class="btn btn-link btn-sm p-0 text-muted" id="chat-textarea-expand-btn"
                                                 data-action="toggle-chat-textarea-expand" title="Expand textarea">
                                             <i class="bi bi-arrows-expand" style="font-size: 1.1rem;"></i>
@@ -548,7 +552,7 @@
                             </button>
                         </div>
                         <div class="card-body">
-                            <p class="text-muted small mb-3">Cron and interval jobs created by agents or via the session_schedule tool. Ordered by session.</p>
+                            <p class="text-muted small mb-3">Cron and interval jobs created by agents or via the session_schedule tool. Click Yes or No to turn a job on or off. Ordered by session.</p>
                             <div id="scheduled-jobs-main-content">
                                 <div class="text-muted text-center py-4">
                                     <i class="bi bi-clock-history fs-2"></i>

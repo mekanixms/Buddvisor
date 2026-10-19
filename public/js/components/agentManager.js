@@ -289,7 +289,7 @@ class AgentManager {
                 <h6>LLM Provider Configuration</h6>
 
                 <div class="row mb-3">
-                  <div class="col-md-6">
+                  <div class="col-md-6" id="agent-provider-group">
                     <label class="form-label">Provider *</label>
                     <select class="form-select" id="agent-provider" required data-action="provider-change">
                       ${this.providers.map(provider => `
@@ -299,7 +299,7 @@ class AgentManager {
                       `).join('')}
                     </select>
                   </div>
-                  <div class="col-md-6">
+                  <div class="col-md-6" id="agent-model-group">
                     <label class="form-label">Model</label>
                     <select class="form-select" id="agent-model" data-action="model-change">
                       ${this.getModelOptions(agent?.provider_type || this.providers[0]?.type, agent?.provider_config?.model)}
@@ -349,18 +349,27 @@ class AgentManager {
                   </div>
                 </div>
 
-                <div id="agent-llamacpp-config" class="row mb-3 d-none">
-                  <div class="col-md-6">
-                    <label class="form-label">llama.cpp Address</label>
-                    <input type="text" class="form-control" id="agent-llamacpp-address"
-                           placeholder="localhost" value="${this.getLlamaCppAddress(agent?.provider_type === 'llamacpp' ? agent?.provider_config : null)}">
-                    <div class="form-text">llama-server host (default localhost)</div>
+                <div id="agent-llamacpp-config" class="mb-3 d-none">
+                  <div class="row">
+                    <div class="col-md-6">
+                      <label class="form-label">llama.cpp Address</label>
+                      <input type="text" class="form-control" id="agent-llamacpp-address"
+                             placeholder="localhost" value="${this.getLlamaCppAddress(agent?.provider_type === 'llamacpp' ? agent?.provider_config : null)}">
+                      <div class="form-text">Hostname or IP of llama-server (default localhost)</div>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label">llama.cpp Port</label>
+                      <input type="number" class="form-control" id="agent-llamacpp-port"
+                             placeholder="8080" min="1" max="65535" value="${this.getLlamaCppPort(agent?.provider_type === 'llamacpp' ? agent?.provider_config : null)}">
+                      <div class="form-text">llama-server port (default 8080). Start the server with --jinja if this agent uses tools.</div>
+                    </div>
                   </div>
-                  <div class="col-md-6">
-                    <label class="form-label">llama.cpp Port</label>
-                    <input type="number" class="form-control" id="agent-llamacpp-port"
-                           placeholder="8080" min="1" max="65535" value="${this.getLlamaCppPort(agent?.provider_type === 'llamacpp' ? agent?.provider_config : null)}">
-                    <div class="form-text">llama-server port (default 8080). Start the server with --jinja if this agent uses tools.</div>
+                  <div class="mt-3">
+                    <label class="form-label" for="agent-llamacpp-alias">Model alias</label>
+                    <input type="text" class="form-control" id="agent-llamacpp-alias"
+                           placeholder="Leave blank for the loaded model"
+                           value="${escapeHtml(agent?.provider_type === 'llamacpp' ? this.llamaCppAliasFromConfig(agent?.provider_config) : '')}">
+                    <div class="form-text">Optional. One server usually serves one model, and a blank alias sends <code>local</code>. Set the <code>-a</code> name, or the id from the server, when it checks the model name. Test connection fills this when the server lists a single model.</div>
                   </div>
                 </div>
 
@@ -824,6 +833,12 @@ class AgentManager {
     if (llamaCppConfig) {
       llamaCppConfig.classList.toggle('d-none', providerType !== 'llamacpp');
     }
+    document.getElementById('agent-model-group')?.classList.toggle('d-none', providerType === 'llamacpp');
+    const providerGroup = document.getElementById('agent-provider-group');
+    if (providerGroup) {
+      providerGroup.classList.toggle('col-md-12', providerType === 'llamacpp');
+      providerGroup.classList.toggle('col-md-6', providerType !== 'llamacpp');
+    }
 
     document.getElementById('agent-openrouter-config')?.classList.toggle('d-none', providerType !== 'openrouter');
 
@@ -891,7 +906,19 @@ class AgentManager {
     const labels = { llamacpp: 'llama.cpp', openrouter: 'OpenRouter' };
     const name = labels[provider.type]
       || (provider.type.charAt(0).toUpperCase() + provider.type.slice(1));
-    return `${name}${provider.requiresApiKey ? '' : ' (Local)'}`;
+    const suffix = provider.requiresApiKey || provider.type === 'llamacpp' ? '' : ' (Local)';
+    return `${name}${suffix}`;
+  }
+
+  /**
+   * Alias to show for llama.cpp. The implicit default `local` stays blank.
+   * @param {object} [config]
+   * @returns {string}
+   */
+  llamaCppAliasFromConfig(config) {
+    const model = typeof config?.model === 'string' ? config.model.trim() : '';
+    if (!model || model === 'local') return '';
+    return model;
   }
 
   /**
@@ -1051,18 +1078,29 @@ class AgentManager {
     try {
       const config = {
         apiKey: apiKey || 'local',
-        model: document.getElementById('agent-model').value,
       };
       if (providerType === 'llamacpp') {
         config.baseURL = this.buildLlamaCppBaseURLFromAgentForm();
+        const alias = document.getElementById('agent-llamacpp-alias')?.value?.trim() || '';
+        if (alias) config.model = alias;
+      } else {
+        config.model = document.getElementById('agent-model').value;
       }
 
       const response = await api.agents.testProvider(providerType, config);
 
       if (response.data.success) {
-        resultSpan.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> Connected (${response.data.latency}ms)</span>`;
+        const discovered = response.data.model;
+        if (providerType === 'llamacpp' && discovered && discovered !== 'local') {
+          const aliasInput = document.getElementById('agent-llamacpp-alias');
+          if (aliasInput && !aliasInput.value.trim()) aliasInput.value = discovered;
+        }
+        const modelNote = discovered && discovered !== 'local'
+          ? ` Using ${discovered}. Save to keep this alias.`
+          : '';
+        resultSpan.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> Connected (${response.data.latency}ms).${escapeHtml(modelNote)}</span>`;
       } else {
-        resultSpan.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${response.data.message}</span>`;
+        resultSpan.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${escapeHtml(response.data.message || '')}</span>`;
       }
     } catch (error) {
       resultSpan.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${error.message}</span>`;
@@ -1128,6 +1166,8 @@ class AgentManager {
     }
 
     if (providerType === 'llamacpp') {
+      const alias = document.getElementById('agent-llamacpp-alias')?.value?.trim() || '';
+      agentData.provider_config.model = alias || null;
       agentData.provider_config.baseURL = this.buildLlamaCppBaseURLFromAgentForm();
     }
 

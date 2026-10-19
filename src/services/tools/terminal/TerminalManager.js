@@ -67,6 +67,30 @@ class TerminalManager {
     return summaries;
   }
 
+  /**
+   * Live shells for one work session, across the orchestrator and every agent.
+   * Each row includes `owner`: `'orchestrator'` or an agent id.
+   */
+  listForWorkSession(sessionId) {
+    const wanted = String(sessionId);
+    const summaries = [];
+    for (const [key, session] of this.sessions) {
+      const pipe = key.indexOf('|');
+      if (pipe < 0) continue;
+      const scope = key.slice(0, pipe);
+      const colon = scope.indexOf(':');
+      if (colon < 0 || scope.slice(0, colon) !== wanted) continue;
+      if (session.dead) {
+        this.sessions.delete(key);
+        continue;
+      }
+      const ownerPart = scope.slice(colon + 1);
+      const owner = ownerPart === 'orchestrator' ? 'orchestrator' : Number(ownerPart);
+      summaries.push({ owner, ...session.summary() });
+    }
+    return summaries;
+  }
+
   countForScope(scope) {
     return this.list(scope).length;
   }

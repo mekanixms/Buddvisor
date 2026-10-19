@@ -135,4 +135,29 @@ class TerminalLog {
   }
 }
 
-module.exports = { TerminalLog };
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Turn a terminal.log tail into the text a person would read:
+ * command lines keep a "$ " prefix, output lines are plain, events keep a "# " prefix.
+ */
+function formatTerminalTranscript(raw, sessionName) {
+  if (!raw) return '';
+  const name = String(sessionName);
+  const outputPrefix = `${name}| `;
+  const safe = escapeRegExp(name);
+  const inputRe = new RegExp(`^\\S+ ${safe}\\$ (.*)$`);
+  const eventRe = new RegExp(`^\\S+ ${safe}# (.*)$`);
+  return String(raw).split('\n').filter((line) => line.length > 0).map((line) => {
+    if (line.startsWith(outputPrefix)) return line.slice(outputPrefix.length);
+    const input = line.match(inputRe);
+    if (input) return `$ ${input[1].replace(/\\n/g, '\n')}`;
+    const event = line.match(eventRe);
+    if (event) return `# ${event[1]}`;
+    return line;
+  }).join('\n');
+}
+
+module.exports = { TerminalLog, formatTerminalTranscript };

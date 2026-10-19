@@ -35,8 +35,24 @@ function resolveApiKey(key) {
 }
 
 /**
+ * Drop a blank alias so chat uses the default model name (`local`).
+ * A non-empty alias is trimmed and kept (including the literal `local`).
+ * @param {object} config
+ * @returns {object}
+ */
+function applyLlamaCppAlias(config) {
+  if (!config || typeof config !== 'object') return config;
+  const alias = typeof config.model === 'string' ? config.model.trim() : '';
+  if (!alias) delete config.model;
+  else config.model = alias;
+  return config;
+}
+
+/**
  * llama.cpp server provider (OpenAI-compatible /v1/chat/completions).
- * Tool calls require the server to be started with --jinja.
+ * One llama-server process usually serves one GGUF. The model name sent on
+ * each request is an optional alias; blank means `local`. Tool calls require
+ * the server to be started with --jinja.
  */
 class LlamaCppProvider extends BaseLLMProvider {
   constructor(config = {}) {
@@ -65,10 +81,22 @@ class LlamaCppProvider extends BaseLLMProvider {
     return [
       {
         id: 'local',
-        name: 'Server model',
-        description: 'Alias from llama-server -a, or the id from GET /v1/models',
+        name: 'Loaded model',
+        description: 'Sent when no alias is set. Override with the -a name or a GET /v1/models id.',
       },
     ];
+  }
+
+  /**
+   * Model ids advertised by this server (GET /v1/models).
+   * @returns {Promise<string[]>}
+   */
+  async listModelIds() {
+    const page = await this.client.models.list();
+    const rows = Array.isArray(page?.data) ? page.data : [];
+    return rows
+      .map((row) => (row && typeof row.id === 'string' ? row.id.trim() : ''))
+      .filter(Boolean);
   }
 
   formatMessages(messages) {
@@ -291,5 +319,7 @@ class LlamaCppProvider extends BaseLLMProvider {
 }
 
 LlamaCppProvider.normalizeLlamaCppBaseURL = normalizeLlamaCppBaseURL;
+LlamaCppProvider.applyAlias = applyLlamaCppAlias;
 LlamaCppProvider.DEFAULT_BASE_URL = DEFAULT_BASE_URL;
+LlamaCppProvider.DEFAULT_MODEL = 'local';
 module.exports = LlamaCppProvider;

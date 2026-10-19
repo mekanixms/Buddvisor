@@ -9,6 +9,8 @@ const ConversationService = require('../services/sessions/ConversationService');
 const ContextManager = require('../services/sessions/ContextManager');
 const WorkSession = require('../models/WorkSession');
 const SessionScheduledJob = require('../models/SessionScheduledJob');
+const { nextRunWhenEnabling } = require('../services/scheduler/SchedulerService');
+const { listTerminalSessionsForSession, getTerminalTranscript } = require('../services/tools/terminalTool');
 const { getPoolDumpForSession } = require('../services/tools/sessionPoolTool');
 const sessionStorageRoutes = require('./sessionStorage.routes');
 
@@ -48,6 +50,43 @@ router.get('/scheduled-jobs', [
     res.json({
       success: true,
       data: { groups },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PATCH /api/sessions/scheduled-jobs/:id
+ * Turn one scheduled job on or off. The job must belong to a session owned by the caller.
+ */
+router.patch('/scheduled-jobs/:id', [
+  param('id').isInt({ min: 1 }).withMessage('Job id must be a positive integer'),
+  body('enabled').isBoolean().withMessage('enabled must be true or false').toBoolean(),
+  validate
+], async (req, res, next) => {
+  try {
+    const job = await SessionScheduledJob.findById(parseInt(req.params.id, 10));
+    if (!job) {
+      return next(new AppError('Scheduled job not found or access denied', 404, 'NOT_FOUND'));
+    }
+    if (req.shareSessionId != null && job.session_id !== req.shareSessionId) {
+      return next(new AppError('Scheduled job not found or access denied', 404, 'NOT_FOUND'));
+    }
+    const session = await WorkSession.findById(job.session_id);
+    if (!session || Number(session.user_id) !== Number(req.userId)) {
+      return next(new AppError('Scheduled job not found or access denied', 404, 'NOT_FOUND'));
+    }
+
+    const enabled = !!req.body.enabled;
+    const updates = { enabled: enabled ? 1 : 0 };
+    if (enabled) {
+      updates.next_run_at = nextRunWhenEnabling(job);
+    }
+    const updated = await SessionScheduledJob.update(job.id, updates);
+    res.json({
+      success: true,
+      data: { job: updated },
     });
   } catch (error) {
     next(error);
@@ -241,6 +280,59 @@ router.get('/:id/pool-dump', [
       success: true,
       assigned: true,
       data: dump,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/sessions/:id/terminals
+ * Live terminal sessions for this work session. enabled is false when the terminal tool is not assigned.
+ */
+router.get('/:id/terminals', [
+  param('id').isInt().withMessage('Invalid session ID'),
+  validate
+], async (req, res, next) => {
+  try {
+    const sessionId = parseInt(req.params.id, 10);
+    const session = await WorkSession.findById(sessionId);
+    if (!session || Number(session.user_id) !== Number(req.userId)) {
+      return next(new AppError('Session not found or access denied', 404, 'NOT_FOUND'));
+    }
+    const listing = await listTerminalSessionsForSession(sessionId);
+    res.json({
+      success: true,
+      data: listing,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/sessions/:id/terminals/output?owner=&name=
+ * Recent output of one live terminal. Does not consume output the agent has not read yet.
+ */
+router.get('/:id/terminals/output', [
+  param('id').isInt().withMessage('Invalid session ID'),
+  query('owner').matches(/^(orchestrator|\d+)$/).withMessage('owner must be an agent id or orchestrator'),
+  query('name').matches(/^[A-Za-z0-9_-]{1,32}$/).withMessage('Invalid terminal name'),
+  validate
+], async (req, res, next) => {
+  try {
+    const sessionId = parseInt(req.params.id, 10);
+    const session = await WorkSession.findById(sessionId);
+    if (!session || Number(session.user_id) !== Number(req.userId)) {
+      return next(new AppError('Session not found or access denied', 404, 'NOT_FOUND'));
+    }
+    const transcript = await getTerminalTranscript(sessionId, req.query.owner, req.query.name);
+    if (transcript == null) {
+      return next(new AppError('Terminal session not found', 404, 'NOT_FOUND'));
+    }
+    res.json({
+      success: true,
+      data: transcript,
     });
   } catch (error) {
     next(error);

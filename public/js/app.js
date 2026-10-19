@@ -657,6 +657,206 @@ function hidePromptingRecommendationsPanel() {
  * Toggle chat textarea expanded state (more rows for long prompts).
  * @param {HTMLElement} btn - The expand/collapse button
  */
+function sessionHasTerminalTool(session) {
+  if (!session) return false;
+  const orchestratorTools = Array.isArray(session.orchestrator_tools) ? session.orchestrator_tools : [];
+  if (orchestratorTools.includes('terminal')) return true;
+  const mapped = session.tool_agent_assignment_map && session.tool_agent_assignment_map.terminal;
+  if (Array.isArray(mapped) && mapped.length > 0) return true;
+  const rows = Array.isArray(session.tool_agent_assignments) ? session.tool_agent_assignments : [];
+  return rows.some((row) => row && row.tool_name === 'terminal');
+}
+
+/**
+ * Show the Terminal button only when the terminal tool is assigned in the current session.
+ */
+function updateTerminalSessionsButton() {
+  const btn = document.getElementById('terminal-sessions-btn');
+  if (!btn) return;
+  const session = window.sessionManager?.currentSession;
+  btn.classList.toggle('d-none', !sessionHasTerminalTool(session));
+}
+
+function formatTerminalAge(seconds) {
+  const total = Math.max(0, Number(seconds) || 0);
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${total % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function terminalStatusLabel(state) {
+  if (state === 'idle') return { text: 'At prompt', badge: 'bg-success' };
+  if (state === 'running') return { text: 'Running', badge: 'bg-warning text-dark' };
+  if (state === 'exited') return { text: 'Exited', badge: 'bg-secondary' };
+  return { text: state || 'Unknown', badge: 'bg-secondary' };
+}
+
+function renderTerminalSessionsBody(bodyEl, listing) {
+  if (!listing || !listing.enabled) {
+    bodyEl.innerHTML = '<p class="text-muted mb-0">The terminal tool is not enabled for this session.</p>';
+    return;
+  }
+  const sessions = Array.isArray(listing.sessions) ? listing.sessions : [];
+  if (sessions.length === 0) {
+    bodyEl.innerHTML = '<p class="text-muted mb-0">No terminal sessions are open.</p>';
+    return;
+  }
+  const rows = sessions.map((row) => {
+    const status = terminalStatusLabel(row.state);
+    const cwd = row.cwd ? `<code>${escapeHtml(row.cwd)}</code>` : '—';
+    const name = row.session
+      ? `<button type="button" class="btn btn-link btn-sm p-0 align-baseline font-monospace" data-action="show-terminal-output" data-owner="${escapeHtml(String(row.owner ?? ''))}" data-terminal-name="${escapeHtml(row.session)}" data-owner-name="${escapeHtml(row.owner_name || '')}" title="Show live output">${escapeHtml(row.session)}</button>`
+      : '—';
+    return `<tr>
+      <td>${escapeHtml(row.owner_name || '—')}</td>
+      <td>${name}</td>
+      <td><span class="badge ${status.badge}">${escapeHtml(status.text)}</span></td>
+      <td>${cwd}</td>
+      <td>${escapeHtml(formatTerminalAge(row.age_s))}</td>
+      <td>${escapeHtml(formatTerminalAge(row.idle_s))}</td>
+    </tr>`;
+  }).join('');
+  bodyEl.innerHTML = `
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered align-middle mb-0">
+        <thead class="table-light">
+          <tr><th>Owner</th><th>Session</th><th>Status</th><th>Directory</th><th>Open for</th><th>Idle</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+/**
+ * Dialog listing live terminal sessions for the current work session.
+ */
+async function showTerminalSessionsModal() {
+  const session = window.sessionManager?.currentSession;
+  if (!session) {
+    showToast('Select a session first', 'warning');
+    return;
+  }
+
+  const existingModal = document.getElementById('terminalSessionsModal');
+  if (existingModal) {
+    stopTerminalOutputPoll();
+    existingModal.remove();
+  }
+
+  const modalHtml = `
+    <div class="modal fade" id="terminalSessionsModal" tabindex="-1">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-terminal me-2"></i>Terminal</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted mb-0">Loading…</p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary d-none" data-action="back-terminal-sessions">Back</button>
+            <button type="button" class="btn btn-outline-primary" data-action="refresh-terminal-sessions">Refresh</button>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  const modalEl = document.getElementById('terminalSessionsModal');
+  const bodyEl = modalEl.querySelector('.modal-body');
+  const modal = new bootstrap.Modal(modalEl);
+  modalEl.addEventListener('hidden.bs.modal', () => {
+    stopTerminalOutputPoll();
+    modalEl.remove();
+  }, { once: true });
+
+  const load = async () => {
+    stopTerminalOutputPoll();
+    modalEl._terminalView = null;
+    const title = modalEl.querySelector('.modal-title');
+    if (title) title.innerHTML = '<i class="bi bi-terminal me-2"></i>Terminal';
+    modalEl.querySelector('[data-action="back-terminal-sessions"]')?.classList.add('d-none');
+    bodyEl.innerHTML = '<p class="text-muted mb-0">Loading…</p>';
+    try {
+      const res = await api.sessions.getTerminalSessions(session.id);
+      renderTerminalSessionsBody(bodyEl, res?.data);
+    } catch (err) {
+      bodyEl.innerHTML = `<p class="text-danger mb-0">${escapeHtml(err?.message || 'Failed to load terminal sessions')}</p>`;
+    }
+  };
+  modalEl._loadTerminalSessions = load;
+  await load();
+  modal.show();
+}
+
+let terminalOutputTimer = null;
+
+function stopTerminalOutputPoll() {
+  if (terminalOutputTimer) {
+    clearInterval(terminalOutputTimer);
+    terminalOutputTimer = null;
+  }
+}
+
+/**
+ * Replace the terminal list with the live output of one shell, and keep refreshing it.
+ */
+async function showTerminalOutput(owner, name, ownerName) {
+  const modalEl = document.getElementById('terminalSessionsModal');
+  const session = window.sessionManager?.currentSession;
+  if (!modalEl || !session || !name) return;
+
+  stopTerminalOutputPoll();
+  const view = { owner, name, ownerName: ownerName || '' };
+  modalEl._terminalView = view;
+  const title = modalEl.querySelector('.modal-title');
+  if (title) {
+    title.innerHTML = `<i class="bi bi-terminal me-2"></i>${escapeHtml(ownerName || 'Terminal')} <span class="text-muted">/</span> <code>${escapeHtml(name)}</code>`;
+  }
+  modalEl.querySelector('[data-action="back-terminal-sessions"]')?.classList.remove('d-none');
+  const bodyEl = modalEl.querySelector('.modal-body');
+  bodyEl.innerHTML = `
+    <p class="small text-muted mb-2 terminal-live-status">Loading…</p>
+    <pre class="terminal-live-output mb-0"></pre>
+  `;
+  await refreshTerminalOutputView(modalEl);
+  terminalOutputTimer = setInterval(() => {
+    refreshTerminalOutputView(modalEl);
+  }, 1000);
+}
+
+async function refreshTerminalOutputView(modalEl) {
+  const view = modalEl?._terminalView;
+  const session = window.sessionManager?.currentSession;
+  if (!view || !session) return;
+  const pre = modalEl.querySelector('.terminal-live-output');
+  const statusEl = modalEl.querySelector('.terminal-live-status');
+  const stick = !pre || (pre.scrollHeight - pre.scrollTop - pre.clientHeight < 48);
+  try {
+    const res = await api.sessions.getTerminalOutput(session.id, view.owner, view.name);
+    if (!modalEl._terminalView || modalEl._terminalView.name !== view.name || modalEl._terminalView.owner !== view.owner) return;
+    const data = res?.data;
+    if (!data || data.enabled === false) {
+      if (statusEl) statusEl.textContent = 'The terminal tool is not enabled for this session.';
+      return;
+    }
+    const status = terminalStatusLabel(data.state);
+    if (statusEl) statusEl.textContent = data.cwd ? `${status.text} · ${data.cwd}` : status.text;
+    if (pre) {
+      const text = data.output ? data.output : '(no output yet)';
+      if (pre.textContent !== text) pre.textContent = text;
+      if (stick) pre.scrollTop = pre.scrollHeight;
+    }
+  } catch (err) {
+    if (!modalEl._terminalView || modalEl._terminalView.name !== view.name) return;
+    if (statusEl) statusEl.textContent = err?.message || 'Failed to load terminal output';
+  }
+}
+
 function toggleChatTextareaExpand(btn) {
   const input = document.getElementById('chat-input');
   if (!input) return;
@@ -802,11 +1002,39 @@ document.addEventListener('click', (e) => {
       showSessionPoolDumpModal();
       break;
 
+    case 'show-terminal-sessions':
+      e.preventDefault();
+      showTerminalSessionsModal();
+      break;
+
+    case 'show-terminal-output':
+      e.preventDefault();
+      showTerminalOutput(target.dataset.owner, target.dataset.terminalName, target.dataset.ownerName);
+      break;
+
+    case 'back-terminal-sessions':
+      e.preventDefault();
+      document.getElementById('terminalSessionsModal')?._loadTerminalSessions?.();
+      break;
+
+    case 'refresh-terminal-sessions':
+      e.preventDefault();
+      {
+        const terminalModal = document.getElementById('terminalSessionsModal');
+        if (terminalModal?._terminalView) refreshTerminalOutputView(terminalModal);
+        else terminalModal?._loadTerminalSessions?.();
+      }
+      break;
+
     case 'toggle-chat-textarea-expand':
       e.preventDefault();
       toggleChatTextareaExpand(target);
       break;
   }
+});
+
+document.addEventListener('sessionChanged', () => {
+  updateTerminalSessionsButton();
 });
 
 // Event delegation for change events (streaming toggle, brainstorming toggle)

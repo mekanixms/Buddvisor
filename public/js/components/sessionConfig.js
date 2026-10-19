@@ -705,7 +705,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                   <div class="mb-3 d-flex align-items-center justify-content-between">
                     <div>
                       <label class="form-label mb-0">Scheduled jobs (this session)</label>
-                      <div class="form-text">Cron and interval jobs for this session only. To see all sessions, use the Scheduled jobs item in the main navigation.</div>
+                      <div class="form-text">Cron and interval jobs for this session only. Click Yes or No to turn a job on or off. To see all sessions, use the Scheduled jobs item in the main navigation.</div>
                     </div>
                     <button type="button" class="btn btn-outline-primary btn-sm" id="scheduled-jobs-refresh-btn" data-action="refresh-scheduled-jobs" title="Refresh list">
                       <i class="bi bi-arrow-clockwise me-1"></i>Refresh
@@ -733,7 +733,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                 <div class="tab-pane fade" id="orchestrator-panel" role="tabpanel">
                   <form id="orchestrator-form">
                     <div class="row mb-3">
-                      <div class="col-md-6">
+                      <div class="col-md-6" id="orchestrator-provider-group">
                         <label class="form-label">Orchestrator Provider</label>
                         <select class="form-select" id="config-orchestrator-provider" data-action="orchestrator-provider-change">
                           ${this.providers.map(provider => `
@@ -744,7 +744,7 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                         </select>
                         <div class="form-text">The main orchestrator agent that routes tasks</div>
                       </div>
-                      <div class="col-md-6">
+                      <div class="col-md-6" id="orchestrator-model-group">
                         <label class="form-label">Orchestrator Model</label>
                         <select class="form-select" id="config-orchestrator-model" data-action="orchestrator-model-change">
                           ${this.getOrchestratorModelOptions(this.currentSession.orchestrator_provider_type || 'claude', currentOrchestratorModel)}
@@ -787,18 +787,33 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                       </div>
                     </div>
 
-                    <div id="orchestrator-llamacpp-config" class="row mb-3 d-none">
-                      <div class="col-md-6">
-                        <label class="form-label">llama.cpp Address</label>
-                        <input type="text" class="form-control" id="config-llamacpp-address"
-                               placeholder="localhost" value="${this.getLlamaCppAddress(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.currentSession.orchestrator_provider_config : null)}">
-                        <div class="form-text">llama-server host (default localhost)</div>
+                    <div id="orchestrator-llamacpp-config" class="mb-3 d-none">
+                      <div class="row">
+                        <div class="col-md-6">
+                          <label class="form-label">llama.cpp Address</label>
+                          <input type="text" class="form-control" id="config-llamacpp-address"
+                                 placeholder="localhost" value="${this.getLlamaCppAddress(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.currentSession.orchestrator_provider_config : null)}">
+                          <div class="form-text">Hostname or IP of llama-server (default localhost)</div>
+                        </div>
+                        <div class="col-md-6">
+                          <label class="form-label">llama.cpp Port</label>
+                          <input type="number" class="form-control" id="config-llamacpp-port"
+                                 placeholder="8080" min="1" max="65535" value="${this.getLlamaCppPort(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.currentSession.orchestrator_provider_config : null)}">
+                          <div class="form-text">llama-server port (default 8080). Start the server with --jinja so tool calls work.</div>
+                        </div>
                       </div>
-                      <div class="col-md-6">
-                        <label class="form-label">llama.cpp Port</label>
-                        <input type="number" class="form-control" id="config-llamacpp-port"
-                               placeholder="8080" min="1" max="65535" value="${this.getLlamaCppPort(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.currentSession.orchestrator_provider_config : null)}">
-                        <div class="form-text">llama-server port (default 8080). Start the server with --jinja so tool calls work.</div>
+                      <div class="mt-3">
+                        <label class="form-label" for="config-llamacpp-alias">Model alias</label>
+                        <input type="text" class="form-control" id="config-llamacpp-alias"
+                               placeholder="Leave blank for the loaded model"
+                               value="${escapeHtml(this.currentSession.orchestrator_provider_type === 'llamacpp' ? this.llamaCppAliasFromConfig(this.currentSession.orchestrator_provider_config) : '')}">
+                        <div class="form-text">Optional. One server usually serves one model, and a blank alias sends <code>local</code>. Set the <code>-a</code> name, or the id from the server, when it checks the model name. Test connection fills this when the server lists a single model.</div>
+                      </div>
+                      <div class="mt-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-action="test-llamacpp-connection" title="Test from this server">
+                          Test connection
+                        </button>
+                        <span id="llamacpp-test-result" class="ms-2 small text-muted"></span>
                       </div>
                     </div>
 
@@ -1273,12 +1288,59 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         const taskType = escapeHtml((job.task_type || '').toLowerCase());
         const taskKey = job.task_key ? escapeHtml(job.task_key) : '—';
         const createdBy = (job.created_by_agent_name && String(job.created_by_agent_name).trim()) ? escapeHtml(job.created_by_agent_name) : '—';
-        const enabled = job.enabled ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>';
-        html += `<tr><td>${job.id}</td><td>${taskKey}</td><td><code>${schedule}</code></td><td>${taskType}</td><td>${createdBy}</td><td>${nextRun}</td><td>${lastRun}</td><td>${enabled}</td></tr>`;
+        const isEnabled = !!job.enabled;
+        const enabled = `<button type="button" class="btn btn-sm py-0 px-2 ${isEnabled ? 'btn-success' : 'btn-secondary'}" data-action="toggle-scheduled-job" data-job-id="${job.id}" data-enabled="${isEnabled ? '1' : '0'}" title="${isEnabled ? 'Click to disable this job' : 'Click to enable this job'}" aria-pressed="${isEnabled ? 'true' : 'false'}">${isEnabled ? 'Yes' : 'No'}</button>`;
+        html += `<tr><td>${job.id}</td><td>${taskKey}</td><td><code>${schedule}</code></td><td>${taskType}</td><td>${createdBy}</td><td data-field="next-run">${nextRun}</td><td>${lastRun}</td><td>${enabled}</td></tr>`;
       }
       html += '</tbody></table></div></div>';
     }
     container.innerHTML = html;
+  }
+
+  /**
+   * Turn a scheduled job on or off from the Enabled column.
+   * @param {HTMLButtonElement} button
+   */
+  async toggleScheduledJob(button) {
+    const jobId = parseInt(button?.dataset?.jobId, 10);
+    if (!jobId || button.disabled) return;
+    const enable = button.dataset.enabled !== '1';
+    const buttons = document.querySelectorAll(`[data-action="toggle-scheduled-job"][data-job-id="${jobId}"]`);
+    buttons.forEach((el) => { el.disabled = true; });
+    try {
+      const response = await api.sessions.setScheduledJobEnabled(jobId, enable);
+      const job = response?.data?.job || { id: jobId, enabled: enable ? 1 : 0 };
+      this.applyScheduledJobEnabledState(job);
+      if (typeof showToast === 'function') {
+        showToast(enable ? 'Scheduled job enabled' : 'Scheduled job disabled', 'success');
+      }
+    } catch (error) {
+      console.error('Error toggling scheduled job:', error);
+      if (typeof showToast === 'function') showToast(error.message || 'Failed to update scheduled job', 'danger');
+      buttons.forEach((el) => { el.disabled = false; });
+    }
+  }
+
+  /**
+   * Reflect an enabled/disabled job in every open scheduled-jobs table.
+   * @param {{ id: number, enabled: number|boolean, next_run_at?: string }} job
+   */
+  applyScheduledJobEnabledState(job) {
+    const enabled = !!job.enabled;
+    const buttons = document.querySelectorAll(`[data-action="toggle-scheduled-job"][data-job-id="${job.id}"]`);
+    buttons.forEach((el) => {
+      el.disabled = false;
+      el.dataset.enabled = enabled ? '1' : '0';
+      el.classList.toggle('btn-success', enabled);
+      el.classList.toggle('btn-secondary', !enabled);
+      el.textContent = enabled ? 'Yes' : 'No';
+      el.title = enabled ? 'Click to disable this job' : 'Click to enable this job';
+      el.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      const nextCell = el.closest('tr')?.querySelector('[data-field="next-run"]');
+      if (nextCell && job.next_run_at && typeof formatAppDateTime === 'function') {
+        nextCell.textContent = formatAppDateTime(job.next_run_at) || '—';
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -2437,7 +2499,24 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
     const labels = { llamacpp: 'llama.cpp', openrouter: 'OpenRouter' };
     const name = labels[provider.type]
       || (provider.type.charAt(0).toUpperCase() + provider.type.slice(1));
-    return `${name}${provider.requiresApiKey ? '' : ' (Local)'}`;
+    const suffix = provider.requiresApiKey || provider.type === 'llamacpp' ? '' : ' (Local)';
+    return `${name}${suffix}`;
+  }
+
+  /**
+   * Alias to show for llama.cpp. The implicit default `local` stays blank.
+   * @param {object|string} [config]
+   * @returns {string}
+   */
+  llamaCppAliasFromConfig(config) {
+    try {
+      const parsed = typeof config === 'string' ? JSON.parse(config) : config;
+      const model = typeof parsed?.model === 'string' ? parsed.model.trim() : '';
+      if (!model || model === 'local') return '';
+      return model;
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -2508,6 +2587,41 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       }
     }
     return `http://${host}:${port}/v1`;
+  }
+
+  /**
+   * Test the llama.cpp server from the current orchestrator fields.
+   * A blank alias asks the server which model it loaded and fills that in.
+   */
+  async testLlamaCppConnection() {
+    const resultEl = document.getElementById('llamacpp-test-result');
+    if (!resultEl) return;
+    resultEl.textContent = 'Testing…';
+    resultEl.className = 'ms-2 small text-muted';
+    try {
+      const alias = document.getElementById('config-llamacpp-alias')?.value?.trim() || '';
+      const apiKey = document.getElementById('config-orchestrator-api-key')?.value?.trim() || '';
+      const config = { baseURL: this.buildLlamaCppBaseURLFromForm() };
+      if (alias) config.model = alias;
+      if (apiKey) config.apiKey = apiKey;
+      const res = await api.agents.testProvider('llamacpp', config);
+      const data = res?.data || {};
+      if (data.success) {
+        if (!alias && data.model && data.model !== 'local') {
+          const input = document.getElementById('config-llamacpp-alias');
+          if (input) input.value = data.model;
+        }
+        const note = data.model && data.model !== 'local' ? ` Using ${data.model}. Save to keep this alias.` : '';
+        resultEl.textContent = `Connected (${data.latency}ms).${note}`;
+        resultEl.className = 'ms-2 small text-success';
+      } else {
+        resultEl.textContent = data.message || 'Failed';
+        resultEl.className = 'ms-2 small text-danger';
+      }
+    } catch (err) {
+      resultEl.textContent = err.message || 'Request failed';
+      resultEl.className = 'ms-2 small text-danger';
+    }
   }
 
   /**
@@ -2803,6 +2917,12 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
     if (llamaCppConfig) {
       llamaCppConfig.classList.toggle('d-none', providerType !== 'llamacpp');
     }
+    document.getElementById('orchestrator-model-group')?.classList.toggle('d-none', providerType === 'llamacpp');
+    const providerGroup = document.getElementById('orchestrator-provider-group');
+    if (providerGroup) {
+      providerGroup.classList.toggle('col-md-12', providerType === 'llamacpp');
+      providerGroup.classList.toggle('col-md-6', providerType !== 'llamacpp');
+    }
 
     document.getElementById('orchestrator-openrouter-config')?.classList.toggle('d-none', providerType !== 'openrouter');
     
@@ -3005,6 +3125,9 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
 
       if (orchestratorProvider === 'llamacpp') {
         orchestratorConfig.baseURL = this.buildLlamaCppBaseURLFromForm();
+        const alias = document.getElementById('config-llamacpp-alias')?.value?.trim() || '';
+        if (alias) orchestratorConfig.model = alias;
+        else delete orchestratorConfig.model;
       }
 
       if (orchestratorProvider === 'openrouter') {
@@ -3377,8 +3500,15 @@ document.addEventListener('click', (e) => {
         sessionConfig.loadScheduledJobs(null, 'scheduled-jobs-main-content');
       }
       break;
+    case 'toggle-scheduled-job':
+      e.preventDefault();
+      sessionConfig.toggleScheduledJob(target);
+      break;
     case 'test-ollama-connection':
       sessionConfig.testOllamaConnection();
+      break;
+    case 'test-llamacpp-connection':
+      sessionConfig.testLlamaCppConnection();
       break;
     case 'fetch-orchestrator-hf':
       e.preventDefault();

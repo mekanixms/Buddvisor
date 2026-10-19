@@ -3,7 +3,7 @@ const os = require('os');
 const path = require('path');
 
 const { cleanTerminalText, trimBlock, truncateMiddle, shellQuote, findLongLine } = require('../../src/services/tools/terminal/textUtils');
-const { TerminalLog } = require('../../src/services/tools/terminal/TerminalLog');
+const { TerminalLog, formatTerminalTranscript } = require('../../src/services/tools/terminal/TerminalLog');
 const { bwrapArgs, sandboxExecProfile, buildWrapper } = require('../../src/services/tools/terminal/sandbox');
 const { validateEnv } = require('../../src/services/tools/terminal/TerminalSession');
 const { TerminalManager } = require('../../src/services/tools/terminal/TerminalManager');
@@ -99,6 +99,18 @@ describe('TerminalLog', () => {
   });
 });
 
+describe('formatTerminalTranscript', () => {
+  test('shows commands and output without the log prefixes', () => {
+    const raw = [
+      '2026-10-19T08:00:00.000Z main$ ls',
+      'main| file.txt',
+      'main| done',
+      '2026-10-19T08:00:01.000Z main# opened jail=soft',
+    ].join('\n');
+    expect(formatTerminalTranscript(raw, 'main')).toBe('$ ls\nfile.txt\ndone\n# opened jail=soft');
+  });
+});
+
 describe('sandbox wrappers', () => {
   const options = { hide: ['/home/u'], allowRead: ['/home/u/.nvm'], documentTargets: ['/app/storage/documents/a.pdf'] };
 
@@ -145,5 +157,23 @@ describe('validation', () => {
   test('scope separates agents and the orchestrator', () => {
     expect(TerminalManager.scopeOf({ sessionId: 1, agentId: 2 })).toBe('1:2');
     expect(TerminalManager.scopeOf({ sessionId: 1 })).toBe('1:orchestrator');
+  });
+});
+
+describe('TerminalManager.listForWorkSession', () => {
+  test('returns live shells for that work session only', () => {
+    const manager = new TerminalManager();
+    const live = (session, state) => ({
+      dead: false,
+      summary: () => ({ session, state, cwd: '.', jail: 'soft', age_s: 4, idle_s: 1 }),
+    });
+    manager.sessions.set('7:3|main', live('main', 'idle'));
+    manager.sessions.set('7:orchestrator|ssh', live('ssh', 'running'));
+    manager.sessions.set('17:3|main', live('main', 'idle'));
+    manager.sessions.set('7:9|old', { dead: true, summary: () => ({ session: 'old' }) });
+
+    const rows = manager.listForWorkSession(7);
+    expect(rows.map((row) => `${row.owner}:${row.session}`).sort()).toEqual(['3:main', 'orchestrator:ssh']);
+    expect(manager.sessions.has('7:9|old')).toBe(false);
   });
 });

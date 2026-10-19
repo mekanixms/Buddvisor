@@ -137,6 +137,10 @@ class APIClient {
     return this.request('PUT', endpoint, data, options);
   }
 
+  async patch(endpoint, data, options = {}) {
+    return this.request('PATCH', endpoint, data, options);
+  }
+
   async delete(endpoint, options = {}) {
     return this.request('DELETE', endpoint, null, options);
   }
@@ -222,6 +226,9 @@ class APIClient {
     getScheduledJobs: (sessionId = null) =>
       sessionId != null ? this.get(`/sessions/scheduled-jobs?sessionId=${sessionId}`) : this.get('/sessions/scheduled-jobs'),
 
+    setScheduledJobEnabled: (jobId, enabled) =>
+      this.patch(`/sessions/scheduled-jobs/${jobId}`, { enabled: !!enabled }),
+
     getMessages: (sessionId, limit = 50, offset = 0) =>
       this.get(`/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`),
 
@@ -274,6 +281,12 @@ class APIClient {
 
     getPoolDump: (sessionId) =>
       this.get(`/sessions/${sessionId}/pool-dump`),
+
+    getTerminalSessions: (sessionId) =>
+      this.get(`/sessions/${sessionId}/terminals`),
+
+    getTerminalOutput: (sessionId, owner, name) =>
+      this.get(`/sessions/${sessionId}/terminals/output?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`),
 
     listStorage: (sessionId, storagePath = '') =>
       this.get(`/sessions/${sessionId}/storage?path=${encodeURIComponent(storagePath || '')}`),

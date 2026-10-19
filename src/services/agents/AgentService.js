@@ -1,6 +1,7 @@
 const Agent = require('../../models/Agent');
 const { ProviderFactory } = require('../../providers');
 const OpenRouterProvider = require('../../providers/OpenRouterProvider');
+const LlamaCppProvider = require('../../providers/LlamaCppProvider');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
 const { fetchModelCapabilities, normalizeRepoId } = require('../integrations/huggingFaceModelService');
@@ -63,6 +64,9 @@ class AgentService {
       delete cleanConfig.apiKey;
     }
     AgentService.normalizeOpenRouterSort(cleanConfig);
+    if (provider_type.toLowerCase() === 'llamacpp') {
+      LlamaCppProvider.applyAlias(cleanConfig);
+    }
 
     const validation = ProviderFactory.validateConfig(provider_type, cleanConfig);
     if (!validation.valid) {
@@ -276,7 +280,10 @@ class AgentService {
       }
 
       AgentService.normalizeOpenRouterSort(mergedConfig);
-      
+      if (providerType === 'llamacpp') {
+        LlamaCppProvider.applyAlias(mergedConfig);
+      }
+
       const validation = ProviderFactory.validateConfig(providerType, mergedConfig);
       if (!validation.valid) {
         throw new Error(`Invalid provider configuration: ${validation.errors.join(', ')}`);

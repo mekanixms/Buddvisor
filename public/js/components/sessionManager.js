@@ -961,6 +961,9 @@ class SessionManager {
       if (typeof window.clearSessionPoolModifiedHighlight === 'function') {
         window.clearSessionPoolModifiedHighlight();
       }
+      if (typeof window.updateTerminalSessionsButton === 'function') {
+        window.updateTerminalSessionsButton();
+      }
 
       // Reload sessions
       await this.loadSessions();

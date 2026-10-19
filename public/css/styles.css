@@ -597,6 +597,19 @@ body.dark-theme .tool-item:hover {
   color: #000 !important;
 }
 
+.terminal-live-output {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  min-height: 16rem;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.8rem;
+}
+
 .sfe-preview-pane {
   min-height: 16rem;
   max-height: 50vh;

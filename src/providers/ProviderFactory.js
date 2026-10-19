@@ -268,14 +268,44 @@ class ProviderFactory {
     const startTime = Date.now();
 
     try {
-      const provider = this.create(type, config);
+      const normalizedType = type?.toLowerCase();
+      let providerConfig = config || {};
+      if (normalizedType === 'llamacpp' && process.env.LLAMACPP_API_KEY) {
+        const key = typeof providerConfig.apiKey === 'string' ? providerConfig.apiKey.trim() : '';
+        if (!key || key === 'local' || key === 'not-required') {
+          providerConfig = { ...providerConfig, apiKey: process.env.LLAMACPP_API_KEY };
+        }
+      }
+
+      const provider = this.create(type, providerConfig);
+      let discoveredModel = null;
+      if (normalizedType === 'llamacpp' && !String(providerConfig.model || '').trim()) {
+        try {
+          const ids = await provider.listModelIds();
+          if (ids.length === 1) {
+            discoveredModel = ids[0];
+            provider.model = discoveredModel;
+          } else if (ids.length > 1) {
+            return {
+              success: false,
+              message: `This server lists ${ids.length} models (${ids.join(', ')}). Enter the alias to use.`,
+              models: ids,
+            };
+          }
+        } catch (error) {
+          logger.debug(`llama.cpp model list failed: ${error.message}`);
+        }
+      }
+
       const healthy = await provider.healthCheck();
 
       if (healthy) {
+        const modelNote = discoveredModel ? ` Using ${discoveredModel}.` : '';
         return {
           success: true,
-          message: `${type} provider is working correctly`,
+          message: `${type} provider is working correctly.${modelNote}`,
           latency: Date.now() - startTime,
+          ...(discoveredModel ? { model: discoveredModel } : {}),
         };
       } else {
         return {

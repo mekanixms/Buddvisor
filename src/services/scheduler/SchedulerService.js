@@ -44,6 +44,29 @@ function computeNextRunAt(job, afterIso = null) {
 }
 
 /**
+ * Next run to store when a job is turned back on.
+ * A future next_run_at is kept. An overdue one is moved to the next slot
+ * after `now`, so enabling a paused job does not run it immediately.
+ * @param {object} job
+ * @param {Date|string} [now]
+ * @returns {string} ISO datetime
+ */
+function nextRunWhenEnabling(job, now = new Date()) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const existing = job.next_run_at ? new Date(job.next_run_at) : null;
+  if (existing && !Number.isNaN(existing.getTime()) && existing.getTime() > nowDate.getTime()) {
+    return job.next_run_at;
+  }
+  const nowIso = nowDate.toISOString();
+  let next = computeNextRunAt(job, nowIso);
+  const nextDate = new Date(next);
+  if (Number.isNaN(nextDate.getTime()) || nextDate.getTime() <= nowDate.getTime()) {
+    next = computeNextRunAt({ ...job, last_run_at: nowIso, created_at: nowIso }, nowIso);
+  }
+  return next;
+}
+
+/**
  * Build shell command from script_path and script_args (safe quoting)
  */
 function buildScriptCommand(scriptPath, scriptArgs) {
@@ -235,5 +258,6 @@ module.exports = {
   SchedulerService,
   schedulerService,
   computeNextRunAt,
+  nextRunWhenEnabling,
   buildScriptCommand,
 };
