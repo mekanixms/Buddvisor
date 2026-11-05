@@ -297,6 +297,7 @@ describe('media intake', () => {
       document: { id: 42, user_id: userId, filename: file.originalname },
     }));
     Message.create.mockResolvedValue({});
+    ChatService.processMessage.mockResolvedValue({ message: 'ack' });
     getWorkspacePathForOrchestrator.mockReset();
   });
 
@@ -313,24 +314,30 @@ describe('media intake', () => {
       size: bytes.length,
     }));
     expect(WorkSession.assignDocument).toHaveBeenCalledWith(7, 42);
-    expect(ChatService.processMessage).not.toHaveBeenCalled();
+    expect(ChatService.processMessage).toHaveBeenCalled();
     expect(sentTexts()[0]).toMatch(/Saved "photo_20231114_221320_BBBB22\.jpg".*assigned to the orchestrator/s);
     expect(sentTexts()[0]).toMatch(/assign photo_20231114_221320_BBBB22\.jpg to @AgentName/);
   });
 
-  test('the upload is recorded in the conversation as a context message from that chat', async () => {
+  test('a photo with no caption starts a chat turn and keeps the file metadata', async () => {
+    ChatService.processMessage.mockResolvedValue({ message: 'got the photo' });
+
     await TelegramService.handleMessage(ctx, photoMessage());
 
-    expect(Message.create).toHaveBeenCalledWith(expect.objectContaining({
-      session_id: 7,
-      role: 'user',
-      content: expect.stringMatching(/Uploaded .*via Telegram.*assigned to the orchestrator/),
-      metadata: expect.objectContaining({
-        channel: 'telegram',
-        telegram_chat_id: '555',
-        document_id: 42,
-      }),
-    }));
+    expect(Message.create).not.toHaveBeenCalled();
+    expect(ChatService.processMessage).toHaveBeenCalledWith(
+      7,
+      1,
+      expect.stringMatching(/Uploaded .*via Telegram.*assigned to the orchestrator/),
+      expect.objectContaining({
+        metadataExtra: expect.objectContaining({
+          channel: 'telegram',
+          telegram_chat_id: '555',
+          telegram_username: 'ana',
+          document_id: 42,
+        }),
+      })
+    );
   });
 
   test('a caption is sent through the chat pipeline together with the file name', async () => {
@@ -424,14 +431,19 @@ describe('media intake', () => {
     const saved = path.join(workspace, 'TelegramDownloads', 'archive.zip');
     expect(fs.readFileSync(saved)).toEqual(bytes);
     expect(WorkSession.assignDocument).not.toHaveBeenCalled();
-    expect(ChatService.processMessage).not.toHaveBeenCalled();
+    expect(Message.create).not.toHaveBeenCalled();
     expect(sentTexts()[0]).toMatch(/TelegramDownloads\/archive\.zip/);
-    expect(Message.create).toHaveBeenCalledWith(expect.objectContaining({
-      session_id: 7,
-      role: 'user',
-      content: expect.stringMatching(/TelegramDownloads\/archive\.zip/),
-      metadata: expect.objectContaining({ channel: 'telegram', download_path: 'TelegramDownloads/archive.zip' }),
-    }));
+    expect(ChatService.processMessage).toHaveBeenCalledWith(
+      7,
+      1,
+      expect.stringMatching(/TelegramDownloads\/archive\.zip/),
+      expect.objectContaining({
+        metadataExtra: expect.objectContaining({
+          channel: 'telegram',
+          download_path: 'TelegramDownloads/archive.zip',
+        }),
+      })
+    );
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
@@ -450,6 +462,19 @@ describe('media intake', () => {
     expect(fs.readFileSync(path.join(workspace, 'TelegramDownloads', files[0]))).toEqual(bytes);
     expect(sentTexts()[0]).toMatch(/Saved the voice message as audio/);
     expect(sentTexts()[0]).toMatch(/TelegramDownloads\/audio_20231114_221320_VOICE1\.ogg/);
+    expect(Message.create).not.toHaveBeenCalled();
+    expect(ChatService.processMessage).toHaveBeenCalledWith(
+      7,
+      1,
+      expect.stringMatching(/Voice message saved as audio at TelegramDownloads\/audio_20231114_221320_VOICE1\.ogg/),
+      expect.objectContaining({
+        metadataExtra: expect.objectContaining({
+          channel: 'telegram',
+          telegram_username: 'ana',
+          download_path: 'TelegramDownloads/audio_20231114_221320_VOICE1.ogg',
+        }),
+      })
+    );
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 

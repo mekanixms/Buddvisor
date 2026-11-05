@@ -770,7 +770,7 @@ class TelegramService {
         return;
       }
       if (name === 'help') {
-        await reply('Send any message to chat with the session.\nPhotos, videos and supported files are saved to the session documents (assigned to the orchestrator). Other files, including voice messages, are saved as files in the orchestrator working folder under TelegramDownloads. A caption is sent as your message.\nAsk the session to send a file and it is uploaded into this chat.\n/status shows the session\n/unlink disconnects this chat');
+        await reply('Send any message to chat with the session.\nPhotos, videos and supported files are saved to the session documents (assigned to the orchestrator). Other files, including voice messages, are saved as files in the orchestrator working folder under TelegramDownloads. Every saved photo, file, and voice message starts a chat turn; a caption is included in that turn.\nAsk the session to send a file and it is uploaded into this chat.\n/status shows the session\n/unlink disconnects this chat');
         return;
       }
       await reply('Unknown command. Send /help for the list.');
@@ -846,30 +846,18 @@ class TelegramService {
   }
 
   /**
-   * Record an upload in the conversation. A caption is sent through the chat
-   * pipeline; without one, only a context message is stored.
+   * Confirm an upload, then run it through the chat pipeline so the
+   * orchestrator answers. A caption is prefixed; without one the note itself
+   * is the user turn. File metadata is stored on that user message.
    */
   static async recordAttachment(ctx, { session, chat, origin, reply }, { caption, note, metadata, confirmation }) {
     const { sessionId } = ctx;
     await reply(confirmation).catch((err) => logger.warn(`Telegram confirmation failed (session ${sessionId}): ${err.message}`));
 
-    if (caption) {
-      await TelegramService.runChat(ctx, { session, chat, origin, reply }, `${caption}\n\n[Attached via Telegram: ${note}]`);
-      return;
-    }
-
-    try {
-      const Message = require('../../models/Message');
-      await Message.create({
-        session_id: sessionId,
-        role: 'user',
-        content: note,
-        metadata: { ...origin, ...metadata },
-      });
-      await require('../sessions/AutoSaveService').autoSave(sessionId, 'message').catch(() => {});
-    } catch (err) {
-      logger.warn(`Could not record Telegram upload in session ${sessionId}: ${err.message}`);
-    }
+    const text = caption
+      ? `${caption}\n\n[Attached via Telegram: ${note}]`
+      : note;
+    await TelegramService.runChat(ctx, { session, chat, origin, reply }, text, metadata);
   }
 
   /**
@@ -981,31 +969,20 @@ class TelegramService {
       ? `Sent ${label} via Telegram (already in the session documents).`
       : `Uploaded ${label} via Telegram. It is in the session documents, assigned to the orchestrator.`;
 
-    await reply(confirmation).catch((err) => logger.warn(`Telegram confirmation failed (session ${sessionId}): ${err.message}`));
-
-    if (caption) {
-      await TelegramService.runChat(ctx, { session, chat, origin, reply }, `${caption}\n\n[Attached via Telegram: "${document.filename}" - ${note}]`);
-      return;
-    }
-
-    try {
-      const Message = require('../../models/Message');
-      await Message.create({
-        session_id: sessionId,
-        role: 'user',
-        content: note,
-        metadata: { ...origin, document_id: document.id, filename: document.filename },
-      });
-      await require('../sessions/AutoSaveService').autoSave(sessionId, 'message').catch(() => {});
-    } catch (err) {
-      logger.warn(`Could not record Telegram upload in session ${sessionId}: ${err.message}`);
-    }
+    await TelegramService.recordAttachment(ctx, { session, chat, origin, reply }, {
+      caption,
+      note: caption ? `"${document.filename}" - ${note}` : note,
+      confirmation,
+      metadata: { document_id: document.id, filename: document.filename },
+    });
   }
 
   /**
    * Run text from a linked Telegram chat through the normal chat pipeline.
+   * Optional metadata (document id, download path) is stored with the user message.
+   * The session owner's username is added by ChatService, same as typed text.
    */
-  static async runChat(ctx, { session, chat, origin, reply }, text) {
+  static async runChat(ctx, { session, chat, origin, reply }, text, metadata = null) {
     const { sessionId, token } = ctx;
 
     const typing = () => TelegramService.api(token, 'sendChatAction', { chat_id: chat.id, action: 'typing' }).catch(() => {});
@@ -1016,9 +993,12 @@ class TelegramService {
       const { ChatService } = require('../chat/ChatService');
       const AutoSaveService = require('../sessions/AutoSaveService');
 
+      const metadataExtra = metadata && typeof metadata === 'object'
+        ? { ...origin, ...metadata }
+        : origin;
       const result = await ChatService.processMessage(sessionId, session.user_id, text, {
         stream: false,
-        metadataExtra: origin,
+        metadataExtra,
       });
       await AutoSaveService.autoSave(sessionId, 'message').catch(() => {});
 
