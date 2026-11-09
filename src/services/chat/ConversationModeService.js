@@ -537,12 +537,14 @@ Guidelines:
     let model = this.getDefaultModel(providerType);
     let baseURL = null;
     let timeout = null;
+    let parsedConfig = null;
     if (session.orchestrator_provider_config) {
       try {
         let config = session.orchestrator_provider_config;
         if (typeof config === 'string') {
           config = JSON.parse(decrypt(config));
         }
+        parsedConfig = config;
         if (config.model) {
           model = config.model;
         }
@@ -558,7 +560,13 @@ Guidelines:
     }
     
     // Build provider config
-    const providerConfig = { apiKey, model };
+    const providerConfig = {
+      apiKey,
+      model,
+      maxTokens: OrchestratorAgent.getOrchestratorMaxTokens({
+        orchestrator_provider_config: parsedConfig,
+      }),
+    };
     if (timeout) {
       providerConfig.timeout = timeout;
     }

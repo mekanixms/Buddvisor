@@ -200,7 +200,12 @@ class OrchestratorAgent {
     // Get timeout from session config or use default
     const timeout = this.getOrchestratorTimeout(session);
 
-    const providerConfig = { apiKey, model, timeout };
+    const providerConfig = {
+      apiKey,
+      model,
+      timeout,
+      maxTokens: this.getOrchestratorMaxTokens(session),
+    };
     if (providerType === 'llamacpp') {
       providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
         || process.env.LLAMACPP_BASE_URL
@@ -460,7 +465,12 @@ Which agent(s) should handle this request?`,
     const timeout = this.getOrchestratorTimeout(session);
     
     // Get baseURL for local servers if configured
-    const providerConfig = { apiKey, model, timeout };
+    const providerConfig = {
+      apiKey,
+      model,
+      timeout,
+      maxTokens: this.getOrchestratorMaxTokens(session),
+    };
     if (providerType === 'ollama' || providerType === 'llamacpp') {
       let baseURL = null;
       if (session.orchestrator_provider_config) {
@@ -789,7 +799,12 @@ Summary:`;
     const timeout = this.getOrchestratorTimeout(session);
     
     // Get baseURL for local servers if configured
-    const providerConfig = { apiKey, model, timeout };
+    const providerConfig = {
+      apiKey,
+      model,
+      timeout,
+      maxTokens: this.getOrchestratorMaxTokens(session),
+    };
     if (providerType === 'ollama' && session.orchestrator_provider_config?.baseURL) {
       providerConfig.baseURL = session.orchestrator_provider_config.baseURL;
     } else if (providerType === 'ollama') {
@@ -935,7 +950,12 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
 
     const model = this.getOrchestratorModel(session, providerType);
     const timeout = this.getOrchestratorTimeout(session);
-    const providerConfig = { apiKey, model, timeout };
+    const providerConfig = {
+      apiKey,
+      model,
+      timeout,
+      maxTokens: this.getOrchestratorMaxTokens(session),
+    };
     if (providerType === 'ollama') {
       providerConfig.baseURL = session.orchestrator_provider_config?.baseURL
         || process.env.OLLAMA_BASE_URL
@@ -1755,6 +1775,15 @@ Always recommend consulting with a CPA for specific tax advice.`,
     }
     // Fall back to default (60 seconds)
     return 60000;
+  }
+
+  /**
+   * Max tokens for an orchestrator answer. Per-call options can still use a smaller cap.
+   */
+  static getOrchestratorMaxTokens(session) {
+    const n = Number(session?.orchestrator_provider_config?.maxTokens);
+    if (Number.isInteger(n) && n >= 1 && n <= 128000) return n;
+    return 4096;
   }
 
   /**

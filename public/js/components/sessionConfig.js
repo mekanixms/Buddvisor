@@ -871,6 +871,15 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
                         <div class="form-text">Request timeout in milliseconds (default: 60000 = 60 seconds)</div>
                       </div>
                     </div>
+                    <div class="row mb-3">
+                      <div class="col-md-6">
+                        <label class="form-label" for="config-orchestrator-max-tokens">Max output tokens</label>
+                        <input type="number" class="form-control" id="config-orchestrator-max-tokens"
+                               value="${this.getOrchestratorMaxTokens(this.currentSession.orchestrator_provider_config)}"
+                               min="1" max="128000">
+                        <div class="form-text">Maximum tokens in an orchestrator answer (default 4096).</div>
+                      </div>
+                    </div>
 
                     <div class="mb-3">
                       <div class="form-check form-switch">
@@ -2735,6 +2744,21 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
   }
 
   /**
+   * Max tokens for an orchestrator answer. Blank config uses 4096.
+   */
+  getOrchestratorMaxTokens(config) {
+    if (!config) return 4096;
+    try {
+      const parsedConfig = typeof config === 'string' ? JSON.parse(config) : config;
+      const n = Number(parsedConfig.maxTokens);
+      if (Number.isInteger(n) && n >= 1 && n <= 128000) return n;
+    } catch (e) {
+      // Ignore parsing errors
+    }
+    return 4096;
+  }
+
+  /**
    * Keep only the decision providers the server accepts.
    */
   normalizeDecisionProvider(provider) {
@@ -3225,6 +3249,11 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
           orchestratorConfig.timeout = timeout;
         }
       }
+
+      const maxTokensRaw = parseInt(document.getElementById('config-orchestrator-max-tokens')?.value, 10);
+      orchestratorConfig.maxTokens = Number.isInteger(maxTokensRaw) && maxTokensRaw >= 1 && maxTokensRaw <= 128000
+        ? maxTokensRaw
+        : 4096;
 
       // Prompt caching (user enables if model supports it)
       const enablePromptCacheEl = document.getElementById('config-orchestrator-enable-prompt-cache');

@@ -14,6 +14,15 @@ const {
   storedCapabilities,
 } = require('../../utils/modelCapabilities');
 
+function assertOrchestratorMaxTokens(config) {
+  if (!config || config.maxTokens == null || config.maxTokens === '') return;
+  const n = Number(config.maxTokens);
+  if (!Number.isInteger(n) || n < 1 || n > 128000) {
+    throw new Error('Orchestrator max output tokens must be between 1 and 128000');
+  }
+  config.maxTokens = n;
+}
+
 function nullableText(value, maxLen, label) {
   if (value == null || value === '') return null;
   const text = String(value).trim();
@@ -178,6 +187,7 @@ class SessionService {
       if (orchestrator_provider_type === 'llamacpp' && orchestrator_provider_config) {
         LlamaCppProvider.applyAlias(orchestrator_provider_config);
       }
+      assertOrchestratorMaxTokens(orchestrator_provider_config);
       if (orchestrator_provider_config && Object.keys(orchestrator_provider_config).length > 0) {
         encryptedConfig = encrypt(JSON.stringify(orchestrator_provider_config));
       }
@@ -625,6 +635,7 @@ class SessionService {
         if (orchestratorType === 'llamacpp' && updates.orchestrator_provider_config) {
           LlamaCppProvider.applyAlias(updates.orchestrator_provider_config);
         }
+        assertOrchestratorMaxTokens(updates.orchestrator_provider_config);
         if (updates.orchestrator_provider_config && Object.keys(updates.orchestrator_provider_config).length > 0) {
           allowedUpdates.orchestrator_provider_config = encrypt(
             JSON.stringify(updates.orchestrator_provider_config)

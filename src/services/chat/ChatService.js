@@ -610,7 +610,13 @@ class ChatService {
     const OrchestratorAgent = require('./OrchestratorAgent');
     const model = OrchestratorAgent.getOrchestratorModel(session, providerType);
 
-    const providerConfig = { apiKey, model };
+    const providerConfig = {
+      apiKey,
+      model,
+      maxTokens: OrchestratorAgent.getOrchestratorMaxTokens({
+        orchestrator_provider_config: parsedOrchestratorConfig,
+      }),
+    };
     if (providerType === 'llamacpp') {
       providerConfig.baseURL = parsedOrchestratorConfig?.baseURL
         || process.env.LLAMACPP_BASE_URL
@@ -918,7 +924,7 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
         apiKey,
         model,
         timeout: Math.max(Number(configuredTimeout) || 0, SUMMARY_CALL_TIMEOUT_MS),
-        ...(cfg.maxTokens ? { maxTokens: cfg.maxTokens } : {}),
+        maxTokens: OrchestratorAgent.getOrchestratorMaxTokens(session),
         ...(cfg.temperature != null ? { temperature: cfg.temperature } : {}),
         ...(llamaCppBaseURL ? { baseURL: llamaCppBaseURL } : {}),
         ...(providerType === 'openrouter' ? OpenRouterProvider.runtimeFields(cfg) : {}),
