@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const crypto = require('crypto');
+const { isOrchestratorAgentId, isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 
 // Ensure storage directory exists
 const STORAGE_DIR = path.join(process.cwd(), 'storage', 'agents-workspaces');
@@ -68,7 +69,9 @@ function getWorkspacePath(folderName, sessionId, agentId, randomizeName = true) 
   }
 
   // Randomized mode: unique per session+agent.
-  const entityId = agentId !== null && agentId !== undefined ? agentId : 'orchestrator';
+  const entityId = agentId !== null && agentId !== undefined && !isOrchestratorAgentId(agentId)
+    ? agentId
+    : 'orchestrator';
   const uniqueId = crypto
     .createHash('sha256')
     .update(`${sessionId}-${entityId}-${raw}`)
@@ -98,7 +101,7 @@ function getWorkspace(context) {
   const randomizeName = toolConfig?.randomize_name !== false;
 
   if (!folderName || typeof folderName !== 'string' || folderName.trim() === '') {
-    const entity = agentId !== null ? 'agent' : 'orchestrator';
+    const entity = agentId !== null && !isOrchestratorAgentId(agentId) ? 'agent' : 'orchestrator';
     throw new Error(`Folder name not configured for this ${entity}. Please configure the folder name in Session Settings → Tools.`);
   }
 
@@ -266,7 +269,7 @@ function registerLocalWorkingFolderTool() {
       const { dbAll } = require('../../../config/database');
       let toolAssignments;
       
-      if (!context.agentId) {
+      if (isOrchestratorContext(context)) {
         // Orchestrator tool config
         toolAssignments = await dbAll(
           `SELECT tool_config FROM session_orchestrator_tools 
@@ -283,7 +286,7 @@ function registerLocalWorkingFolderTool() {
       }
 
       if (!toolAssignments || toolAssignments.length === 0) {
-        const entity = context.agentId ? 'agent' : 'orchestrator';
+        const entity = isOrchestratorContext(context) ? 'orchestrator' : 'agent';
         throw new Error(`local_working_folder tool is not configured for this ${entity}. Please configure it in Session Settings → Tools.`);
       }
 
@@ -297,7 +300,7 @@ function registerLocalWorkingFolderTool() {
       }
 
       if (!toolConfig || !toolConfig.folder_name || toolConfig.folder_name.trim() === '') {
-        const entity = context.agentId ? 'agent' : 'orchestrator';
+        const entity = isOrchestratorContext(context) ? 'orchestrator' : 'agent';
         throw new Error(`Folder name not configured for this ${entity}. Please configure the folder name in Session Settings → Tools.`);
       }
 
@@ -843,7 +846,7 @@ async function syncAssignedDocumentsToWorkspace(sessionId, agentId) {
   if (!Number.isFinite(sessionId)) return;
 
   let workspacePath;
-  if (agentId != null && Number.isFinite(agentId)) {
+  if (agentId != null && Number.isFinite(agentId) && !isOrchestratorAgentId(agentId)) {
     workspacePath = await getWorkspacePathForSessionAgent(sessionId, agentId);
   } else {
     workspacePath = await getWorkspacePathForOrchestrator(sessionId);
@@ -851,7 +854,7 @@ async function syncAssignedDocumentsToWorkspace(sessionId, agentId) {
   if (!workspacePath) return;
 
   const Document = require('../../models/Document');
-  const isOrchestrator = agentId == null || !Number.isFinite(agentId);
+  const isOrchestrator = agentId == null || !Number.isFinite(agentId) || isOrchestratorAgentId(agentId);
   let docs;
   if (isOrchestrator) {
     docs = await Document.getBySession(sessionId);

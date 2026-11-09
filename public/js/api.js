@@ -270,8 +270,12 @@ class APIClient {
     getAgentContext: (sessionId, agentId) =>
       this.get(`/sessions/${sessionId}/agents/${agentId}/context`),
 
-    setAgentContext: (sessionId, agentId, context) =>
-      this.put(`/sessions/${sessionId}/agents/${agentId}/context`, { context }),
+    setAgentContext: (sessionId, agentId, context, contextTokens) => {
+      const body = {};
+      if (context !== undefined) body.context = context;
+      if (contextTokens !== undefined) body.context_tokens = contextTokens;
+      return this.put(`/sessions/${sessionId}/agents/${agentId}/context`, body);
+    },
 
     getAgentDefaultPrompt: (sessionId, agentId) =>
       this.get(`/sessions/${sessionId}/agents/${agentId}/default-prompt`),

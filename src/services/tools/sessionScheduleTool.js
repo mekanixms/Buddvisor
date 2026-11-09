@@ -8,6 +8,7 @@
 const { toolRegistry } = require('./ToolRegistry');
 const SessionScheduledJob = require('../../models/SessionScheduledJob');
 const WorkSession = require('../../models/WorkSession');
+const { isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 const { computeNextRunAt } = require('../scheduler/SchedulerService');
 const logger = require('../../utils/logger');
 
@@ -102,17 +103,20 @@ function registerSessionScheduleTool() {
       if (!context.sessionId) {
         throw new Error('sessionId is required in context');
       }
-      if (!context.agentId) {
+      const orchestrator = isOrchestratorContext(context);
+      if (!orchestrator && context.agentId == null) {
         throw new Error('session_schedule can only be used by an agent in a session (agentId required)');
       }
 
       const sessionId = context.sessionId;
-      const agentId = context.agentId;
+      const agentId = orchestrator ? null : context.agentId;
 
-      const agents = await WorkSession.getAgents(sessionId);
-      const agentIds = (agents || []).map((a) => a.id);
-      if (!agentIds.includes(agentId)) {
-        return { success: false, error: 'Calling agent is not in this session' };
+      if (!orchestrator) {
+        const agents = await WorkSession.getAgents(sessionId);
+        const agentIds = (agents || []).map((a) => a.id);
+        if (!agentIds.includes(context.agentId)) {
+          return { success: false, error: 'Calling agent is not in this session' };
+        }
       }
 
       const now = new Date().toISOString();

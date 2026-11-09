@@ -139,6 +139,30 @@ describe('email tool', () => {
     expect(mailOps.listMessages).not.toHaveBeenCalled();
   });
 
+  it('loads the orchestrator mailbox when the caller is the orchestrator id', async () => {
+    dbAll.mockResolvedValue([{
+      tool_config: JSON.stringify({
+        protocol: 'imap',
+        incoming_host: 'orch.example.com',
+        username: 'orch@example.com',
+        password: 'orch-pass',
+        smtp_host: 'orch.example.com',
+      }),
+    }]);
+    mailOps.listMessages.mockResolvedValue({ messages: [] });
+    await handler({ action: 'list' }, {
+      sessionId: 4,
+      agentId: -4,
+      isOrchestrator: true,
+      toolConfig: { folder_name: 'workspace' },
+    });
+    expect(dbAll).toHaveBeenCalledWith(
+      expect.stringContaining('session_orchestrator_tools'),
+      [4, 'email']
+    );
+    expect(mailOps.listMessages.mock.calls[0][0].incoming.host).toBe('orch.example.com');
+  });
+
   it('loads the saved email config when another tool left its config on the context', async () => {
     process.env.SMTP_HOST = 'smtp.gmail.com';
     process.env.SMTP_USER = 'gmail@example.com';

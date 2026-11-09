@@ -7,6 +7,7 @@
 const { toolRegistry } = require('./ToolRegistry');
 const logger = require('../../utils/logger');
 const { resolveEmailAccount, incomingReady, smtpReady, publicAccount } = require('../email/emailConfig');
+const { isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 const { POP3_LIMITATION, collectIds, scrubSecrets } = require('../email/plan');
 const {
   listMessages,
@@ -40,18 +41,18 @@ async function loadToolConfig(context) {
   }
   const { dbAll } = require('../../../config/database');
   const sessionId = context.sessionId;
-  const agentId = context.agentId == null ? null : context.agentId;
-  const rows = agentId == null
+  const orchestrator = isOrchestratorContext(context);
+  const rows = orchestrator
     ? await dbAll(
       'SELECT tool_config FROM session_orchestrator_tools WHERE session_id = ? AND tool_name = ?',
       [sessionId, 'email']
     )
     : await dbAll(
       'SELECT tool_config FROM session_agent_tools WHERE session_id = ? AND agent_id = ? AND tool_name = ?',
-      [sessionId, agentId, 'email']
+      [sessionId, context.agentId, 'email']
     );
   if (!rows || rows.length === 0) {
-    const who = agentId == null ? 'orchestrator' : 'agent';
+    const who = orchestrator ? 'orchestrator' : 'agent';
     throw new Error(`The email tool is not enabled for this ${who}. Assign it in Configure Session → Tools.`);
   }
   let config = rows[0].tool_config;

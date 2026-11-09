@@ -281,10 +281,32 @@ class SessionConfig {
                       </div>
                     </div>
                     <div class="mb-3">
-                      <label class="form-label">Context Window Size</label>
+                      <label class="form-label">Recent messages</label>
                       <input type="number" class="form-control" id="config-context-length"
                              value="${this.currentSession.context_length || 10}" min="1" max="200">
-                      <div class="form-text">Number of recent messages to include in context (1-200)</div>
+                      <div class="form-text">How many recent chat messages are included before compacting (1-200). This count is shared by the session.</div>
+                    </div>
+                    <div class="row">
+                      <div class="col-md-4 mb-3">
+                        <label class="form-label" for="config-context-tokens">Context size (tokens)</label>
+                        <input type="number" class="form-control" id="config-context-tokens"
+                               value="${this.currentSession.context_tokens || ''}" min="1" max="10000000"
+                               placeholder="Model default">
+                        <div class="form-text">Session token window. Compacting measures prompts against this size unless an agent or the orchestrator sets its own. Blank uses that model's reported context length, when one has been fetched.</div>
+                      </div>
+                      <div class="col-md-4 mb-3">
+                        <label class="form-label" for="config-orchestrator-context-tokens">Orchestrator context size (tokens)</label>
+                        <input type="number" class="form-control" id="config-orchestrator-context-tokens"
+                               value="${this.currentSession.orchestrator_context_tokens || ''}" min="1" max="10000000"
+                               placeholder="${this.currentSession.context_tokens || this.reportedContextTokens(this.currentSession.orchestrator_model_capabilities) || 'Session or model'}">
+                        <div class="form-text">Token window for the orchestrator. Blank uses the session size${this.reportedContextNote(this.currentSession.orchestrator_model_capabilities)}.</div>
+                      </div>
+                      <div class="col-md-4 mb-3">
+                        <label class="form-label" for="config-context-compact-percent">Compacting limit (%)</label>
+                        <input type="number" class="form-control" id="config-context-compact-percent"
+                               value="${this.currentSession.context_compact_percent || 70}" min="1" max="100">
+                        <div class="form-text">When a prompt exceeds this percentage of the context size for the model answering the turn, that model summarizes the prior context first, then answers from the system prompt, the summary, and the new message.</div>
+                      </div>
                     </div>
                     <div class="mb-3">
                       <label class="form-label">Orchestration Mode</label>
@@ -313,7 +335,7 @@ class SessionConfig {
                     ` : `
                       <div class="form-text mb-2 small">
                         <i class="bi bi-info-circle me-1"></i>
-                        Click the <i class="bi bi-chat-text"></i> icon on assigned agents to edit their session-specific context.
+                        Set <strong>Context size</strong> (tokens) for each assigned agent. Blank uses the session size. Click the <i class="bi bi-chat-text"></i> icon to edit that agent's session prompt.
                       </div>
                       <div class="list-group" id="agent-assignment-list">
                         ${availableAgents.map(agent => {
@@ -331,6 +353,18 @@ class SessionConfig {
                                 ${this.getRoleDisplayName(agent.role)} • ${agent.provider_type}
                               </small>
                             </label>
+                            ${isAssigned ? `
+                              <div class="ms-2" style="width: 9.5rem;">
+                                <label class="form-label small text-muted mb-0" for="agent-context-tokens-${agent.id}">Context size</label>
+                                <input type="number" class="form-control form-control-sm agent-context-tokens"
+                                       id="agent-context-tokens-${agent.id}"
+                                       data-agent-id="${agent.id}"
+                                       min="1" max="10000000"
+                                       placeholder="${this.currentSession.context_tokens || this.reportedContextTokens(agent.model_capabilities) || 'Session'}"
+                                       value="${assignedAgent?.context_tokens || ''}"
+                                       title="Token window for this agent in this session. Blank uses the session size, then the model's reported length.">
+                              </div>
+                            ` : ''}
                             ${isAssigned ? `
                               <button type="button" class="btn btn-outline-secondary btn-sm ms-2"
                                       data-action="edit-agent-context" data-agent-id="${agent.id}"
@@ -1769,6 +1803,26 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
     ['prompt_caching_hint', 'prompt cache'],
   ];
 
+  reportedContextTokens(raw) {
+    const caps = this.asCapabilityObject(raw);
+    if (!caps) return null;
+    const candidates = [
+      caps.hf_runtime_hints && caps.hf_runtime_hints.context_length,
+      caps.openrouter_runtime_hints && caps.openrouter_runtime_hints.context_length,
+      caps.context_length,
+    ];
+    for (const candidate of candidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    }
+    return null;
+  }
+
+  reportedContextNote(raw) {
+    const reported = this.reportedContextTokens(raw);
+    return reported ? `, then the model's reported length (${reported} tokens)` : ', then the model\'s reported length when it has been fetched';
+  }
+
   asCapabilityObject(value) {
     if (!value) return null;
     if (typeof value === 'object' && !Array.isArray(value)) return value;
@@ -2063,6 +2117,13 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
               <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+              <div class="mb-3">
+                <label class="form-label" for="agent-context-tokens-input"><strong>Context size (tokens)</strong></label>
+                <input type="number" class="form-control" id="agent-context-tokens-input" min="1" max="10000000"
+                       value="${agent.context_tokens || ''}"
+                       placeholder="${this.currentSession.context_tokens || this.reportedContextTokens(agent.model_capabilities) || 'Session or model default'}">
+                <div class="form-text">Token window for ${escapeHtml(agent.name)} in this session. The compacting limit is this percentage of that size. Blank uses the session context size${this.reportedContextNote(agent.model_capabilities)}.</div>
+              </div>
               <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
                 <label class="form-label">
                   <strong>Agent Session Context</strong>
@@ -2117,8 +2178,12 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       const saved = (res?.data?.context != null && res.data.context !== '') ? String(res.data.context) : '';
       textarea.value = saved;
       textarea.placeholder = 'Optional: add custom session context...';
-      // Update local state so icon and other UI stay in sync
       agent.session_context = saved;
+      if (res?.data && Object.prototype.hasOwnProperty.call(res.data, 'context_tokens')) {
+        agent.context_tokens = res.data.context_tokens;
+        const tokenInput = document.getElementById('agent-context-tokens-input');
+        if (tokenInput) tokenInput.value = res.data.context_tokens || '';
+      }
     } catch (e) {
       console.error('Error loading agent context:', e);
       showToast('Failed to load saved context', 'danger');
@@ -2164,10 +2229,15 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         saveBtn.disabled = true;
         saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving...';
 
-        await api.sessions.setAgentContext(this.currentSession.id, agentId, textarea.value);
+        const tokenInput = document.getElementById('agent-context-tokens-input');
+        const tokenRaw = tokenInput ? tokenInput.value.trim() : '';
+        const contextTokens = tokenRaw === '' ? null : parseInt(tokenRaw, 10);
+        await api.sessions.setAgentContext(this.currentSession.id, agentId, textarea.value, contextTokens);
 
-        // Update local state
         agent.session_context = textarea.value;
+        agent.context_tokens = contextTokens;
+        const rowInput = document.getElementById(`agent-context-tokens-${agentId}`);
+        if (rowInput) rowInput.value = tokenRaw;
 
         // Update the icon to show filled if has content
         const iconBtn = document.querySelector(`[data-action="edit-agent-context"][data-agent-id="${agentId}"] i`);
@@ -3071,6 +3141,16 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       const name = document.getElementById('config-session-name').value;
       const description = document.getElementById('config-session-desc').value;
       const contextLength = parseInt(document.getElementById('config-context-length').value) || 50;
+      const compactPercentRaw = parseInt(document.getElementById('config-context-compact-percent')?.value, 10);
+      const contextCompactPercent = Number.isFinite(compactPercentRaw) ? compactPercentRaw : 70;
+      const readTokenField = (id) => {
+        const raw = document.getElementById(id)?.value?.trim();
+        if (!raw) return null;
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) ? n : null;
+      };
+      const contextTokens = readTokenField('config-context-tokens');
+      const orchestratorContextTokens = readTokenField('config-orchestrator-context-tokens');
       const orchestratorProvider = document.getElementById('config-orchestrator-provider').value;
 
       // Get orchestrator model
@@ -3183,6 +3263,9 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
         name,
         description,
         context_length: contextLength,
+        context_compact_percent: contextCompactPercent,
+        context_tokens: contextTokens,
+        orchestrator_context_tokens: orchestratorContextTokens,
         orchestrator_provider_type: orchestratorProvider,
         orchestrator_provider_config: finalConfig,
         conversation_mode_enabled: conversationModeEnabled ? 1 : 0,
@@ -3299,6 +3382,16 @@ class="form-control form-control-sm orchestrator-tool-config-input text-center"
       // Remove agents
       for (const agentId of agentsToRemove) {
         await api.sessions.removeAgent(this.currentSession.id, agentId);
+      }
+
+      for (const input of document.querySelectorAll('.agent-context-tokens')) {
+        const agentId = parseInt(input.dataset.agentId, 10);
+        if (!selectedAgentIds.includes(agentId)) continue;
+        const raw = input.value.trim();
+        const tokens = raw === '' ? null : parseInt(raw, 10);
+        await api.sessions.setAgentContext(this.currentSession.id, agentId, undefined, tokens);
+        const assigned = (this.currentSession.agents || []).find(a => a.id === agentId);
+        if (assigned) assigned.context_tokens = tokens;
       }
 
       // Save document matrix: Orchestrator column + per-agent columns (always present when documents tab is rendered)

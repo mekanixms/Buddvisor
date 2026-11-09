@@ -4,6 +4,7 @@
  */
 
 const logger = require('../../../utils/logger');
+const { isOrchestratorAgentId } = require('../../../utils/orchestratorIdentity');
 const { resolveSandbox } = require('./sandbox');
 const { TerminalSession } = require('./TerminalSession');
 const { TerminalLog } = require('./TerminalLog');
@@ -35,7 +36,10 @@ class TerminalManager {
   }
 
   static scopeOf(context) {
-    return `${context.sessionId}:${context.agentId !== undefined && context.agentId !== null ? context.agentId : 'orchestrator'}`;
+    const owner = context.agentId !== undefined && context.agentId !== null && !isOrchestratorAgentId(context.agentId)
+      ? context.agentId
+      : 'orchestrator';
+    return `${context.sessionId}:${owner}`;
   }
 
   key(scope, name) {

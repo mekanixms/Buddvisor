@@ -399,7 +399,10 @@ function stopEmailWatchers() {
 
 function getWatcherStatus(context) {
   const sessionId = Number(context && context.sessionId);
-  const who = context && context.agentId != null ? String(context.agentId) : 'orchestrator';
+  const { isOrchestratorAgentId } = require('../../utils/orchestratorIdentity');
+  const who = context && context.agentId != null && !isOrchestratorAgentId(context.agentId)
+    ? String(context.agentId)
+    : 'orchestrator';
   const prefix = `${sessionId}:${who}:`;
   for (const [key, state] of watchers) {
     if (!key.startsWith(prefix)) continue;

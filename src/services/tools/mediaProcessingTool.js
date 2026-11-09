@@ -15,6 +15,7 @@ const MediaTranscriptionService = require('../documents/MediaTranscriptionServic
 const VideoFrameExtractionService = require('../documents/VideoFrameExtractionService');
 const PdfPageExtractionService = require('../documents/PdfPageExtractionService');
 const logger = require('../../utils/logger');
+const { isOrchestratorAgentId } = require('../../utils/orchestratorIdentity');
 
 const PROCESS_MEDIA_CACHE_DIR = '.process_media_cache';
 
@@ -174,7 +175,7 @@ async function collectMediaProviderCandidates(sessionId, callerAgentId) {
     candidates.push({ source, info, caps: info.capabilities || null });
   };
 
-  if (Number.isFinite(callerAgentId)) {
+  if (Number.isFinite(callerAgentId) && !isOrchestratorAgentId(callerAgentId)) {
     add(`caller:agent:${callerAgentId}`, await getAgentModelInfo(callerAgentId));
   } else {
     add('caller:orchestrator', await getOrchestratorModelInfo(sessionId));
@@ -593,7 +594,7 @@ function registerMediaProcessingTool() {
         };
       }
 
-      const isOrchestrator = agentId == null || !Number.isFinite(agentId);
+      const isOrchestrator = agentId == null || !Number.isFinite(agentId) || isOrchestratorAgentId(agentId);
       let assignedDocs;
       let workspacePath;
       let agentInfo;

@@ -12,6 +12,7 @@ const fsSync = require('fs');
 const { spawn } = require('child_process');
 const os = require('os');
 const { getWorkspacePath, resolveWorkspacePath } = require('./localWorkingFolderTool');
+const { isOrchestratorContext, workspaceAgentId } = require('../../utils/orchestratorIdentity');
 
 // Dangerous command patterns to block
 const DANGEROUS_PATTERNS = [
@@ -277,7 +278,7 @@ function registerWorkspaceExecTool() {
       const { dbAll } = require('../../../config/database');
       let workspaceAssignments;
       
-      if (!context.agentId) {
+      if (isOrchestratorContext(context)) {
         // Orchestrator tool config
         workspaceAssignments = await dbAll(
           `SELECT tool_config FROM session_orchestrator_tools 
@@ -294,7 +295,7 @@ function registerWorkspaceExecTool() {
       }
 
       if (!workspaceAssignments || workspaceAssignments.length === 0) {
-        const entity = context.agentId ? 'agent' : 'orchestrator';
+        const entity = isOrchestratorContext(context) ? 'orchestrator' : 'agent';
         throw new Error(`local_working_folder tool must be configured for this ${entity} before using workspace_exec. Please configure the folder name in Session Settings → Tools.`);
       }
 
@@ -308,12 +309,12 @@ function registerWorkspaceExecTool() {
       }
 
       if (!workspaceConfig || !workspaceConfig.folder_name || workspaceConfig.folder_name.trim() === '') {
-        const entity = context.agentId ? 'agent' : 'orchestrator';
+        const entity = isOrchestratorContext(context) ? 'orchestrator' : 'agent';
         throw new Error(`Workspace folder name not configured for this ${entity}. Please configure local_working_folder in Session Settings → Tools.`);
       }
 
       // Get workspace path (must match local_working_folder, including randomize_name)
-      const agentId = context.agentId !== undefined ? context.agentId : null;
+      const agentId = workspaceAgentId(context.agentId);
       const randomizeName = workspaceConfig.randomize_name !== false;
       const workspacePath = getWorkspacePath(
         workspaceConfig.folder_name.trim(),

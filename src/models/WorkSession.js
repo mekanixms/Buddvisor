@@ -14,6 +14,9 @@ class WorkSession {
         name,
         description = null,
         context_length = 50,
+        context_compact_percent = 70,
+        context_tokens = null,
+        orchestrator_context_tokens = null,
         orchestrator_provider_type = 'claude',
         orchestrator_provider_config = null,
         orchestrator_hf_model_repo = null,
@@ -23,15 +26,19 @@ class WorkSession {
 
       const result = await dbRun(
         `INSERT INTO work_sessions (
-          user_id, name, description, context_length,
+          user_id, name, description, context_length, context_compact_percent,
+          context_tokens, orchestrator_context_tokens,
           orchestrator_provider_type, orchestrator_provider_config,
           orchestrator_hf_model_repo, orchestrator_openrouter_model_id, orchestrator_model_capabilities
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           user_id,
           name,
           description,
           context_length,
+          context_compact_percent,
+          context_tokens,
+          orchestrator_context_tokens,
           orchestrator_provider_type,
           orchestrator_provider_config,
           orchestrator_hf_model_repo,
@@ -133,6 +140,9 @@ class WorkSession {
         'name',
         'description',
         'context_length',
+        'context_compact_percent',
+        'context_tokens',
+        'orchestrator_context_tokens',
         'orchestrator_provider_type',
         'orchestrator_provider_config',
         'orchestrator_hf_model_repo',
@@ -284,7 +294,7 @@ class WorkSession {
 
       const [agents, documents, documentAgentAssignments, toolAgentAssignments] = await Promise.all([
         dbAll(
-          `SELECT a.*, sa.session_context
+          `SELECT a.*, sa.session_context, sa.context_tokens
            FROM agents a
            INNER JOIN session_agents sa ON a.id = sa.agent_id
            WHERE sa.session_id = ?
@@ -706,7 +716,7 @@ class WorkSession {
   static async getAgents(sessionId) {
     try {
       return await dbAll(
-        `SELECT a.*, sa.session_context FROM agents a
+        `SELECT a.*, sa.session_context, sa.context_tokens FROM agents a
          INNER JOIN session_agents sa ON a.id = sa.agent_id
          WHERE sa.session_id = ?
          ORDER BY a.name`,
@@ -738,6 +748,26 @@ class WorkSession {
   }
 
   /**
+   * Session prompt and token context size for one assigned agent.
+   * @returns {Promise<{context: string|null, context_tokens: number|null}>}
+   */
+  static async getAgentSessionSettings(sessionId, agentId) {
+    try {
+      const row = await dbGet(
+        'SELECT session_context, context_tokens FROM session_agents WHERE session_id = ? AND agent_id = ?',
+        [sessionId, agentId]
+      );
+      return {
+        context: row ? row.session_context : null,
+        context_tokens: row ? row.context_tokens : null,
+      };
+    } catch (error) {
+      logger.error('Error getting agent session settings:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Set agent session context
    * @param {number} sessionId - Session ID
    * @param {number} agentId - Agent ID
@@ -752,6 +782,25 @@ class WorkSession {
       logger.info(`Agent ${agentId} session context updated in session ${sessionId}`);
     } catch (error) {
       logger.error('Error setting agent session context:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Set the token context size for an agent in this session.
+   * Null clears the override so the session size, then the model length, is used.
+   * @param {number} sessionId
+   * @param {number} agentId
+   * @param {number|null} contextTokens
+   */
+  static async setAgentContextTokens(sessionId, agentId, contextTokens) {
+    try {
+      await dbRun(
+        'UPDATE session_agents SET context_tokens = ? WHERE session_id = ? AND agent_id = ?',
+        [contextTokens, sessionId, agentId]
+      );
+    } catch (error) {
+      logger.error('Error setting agent context size:', error);
       throw error;
     }
   }

@@ -18,6 +18,8 @@ const promptsLogger = logger.promptsLogger;
 const BaseLLMProvider = require('../../providers/BaseLLMProvider');
 const { expandPromptMacros } = require('../../utils/promptMacros');
 const { usageFromResponse, tokenRow, mergeTokenRows } = require('./tokenUsage');
+const { compactionOptions, compactMessagesIfNeeded } = require('./contextCompaction');
+const { orchestratorToolContext } = require('../../utils/orchestratorIdentity');
 const DecisionRouter = require('./DecisionRouter');
 
 const DOCUMENT_ADMIN_TOOL = 'manage_agent_documents';
@@ -577,7 +579,12 @@ Summary:`;
       }
 
       // Execute with tool support
-      const execOpts = { stream, onChunk, allowedToolNames: providerAllowedToolNames };
+      const execOpts = {
+        stream,
+        onChunk,
+        allowedToolNames: providerAllowedToolNames,
+        ...compactionOptions(session, agent.model_capabilities, agent.name, agent.context_tokens),
+      };
       if (agent.provider_config?.enablePromptCache) {
         execOpts.usePromptCache = true;
         execOpts.conversationId = conversationIdForCache(session.id, agent.id);
@@ -687,7 +694,12 @@ Summary:`;
             const toolsLine = (providerTools && providerTools.length > 0) ? '\nTools: ' + providerTools.map(t => t.name).join(', ') : '';
             promptsLogger.info(`\n\n=== AGENT PROMPT: ${agent.name} (${agent.role}) ===\n` + JSON.stringify(messages, null, 2) + toolsLine);
 
-            const multiExecOpts = { stream: false, onChunk: null, allowedToolNames: providerAllowedToolNames };
+            const multiExecOpts = {
+              stream: false,
+              onChunk: null,
+              allowedToolNames: providerAllowedToolNames,
+              ...compactionOptions(session, agent.model_capabilities, agent.name, agent.context_tokens),
+            };
             if (agent.provider_config?.enablePromptCache) {
               multiExecOpts.usePromptCache = true;
               multiExecOpts.conversationId = conversationIdForCache(session.id, agent.id);
@@ -860,7 +872,11 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
     }
 
     // Execute with tool support
-    const execOptions = { stream, onChunk };
+    const execOptions = {
+      stream,
+      onChunk,
+      ...compactionOptions(session, session.orchestrator_model_capabilities, 'Orchestrator', session.orchestrator_context_tokens),
+    };
     if (session.orchestrator_provider_config?.enablePromptCache) {
       execOptions.usePromptCache = true;
       execOptions.conversationId = conversationIdForCache(session.id, null);
@@ -869,7 +885,7 @@ ${documentContext ? `\n\n## Document Context\n\nUse the following document conte
       provider,
       messages,
       tools,
-      { userId: session.user_id, sessionId: session.id, agentId: null },
+      orchestratorToolContext(session),
       execOptions
     );
 
@@ -1162,6 +1178,7 @@ ${agentJsonList}
       parallelToolNames: ['delegate_to_agent'],
       // delegate_to_agent emits structured delegation_status events instead of raw [Tool] notices
       toolNoticeExclude: ['delegate_to_agent'],
+      ...compactionOptions(session, session.orchestrator_model_capabilities, 'Orchestrator', session.orchestrator_context_tokens),
     };
     if (session.orchestrator_provider_config?.enablePromptCache) {
       execOptions.usePromptCache = true;
@@ -1172,7 +1189,7 @@ ${agentJsonList}
       provider,
       messages,
       tools,
-      { userId: session.user_id, sessionId: session.id, agentId: null },
+      orchestratorToolContext(session),
       execOptions
     );
 
@@ -1247,7 +1264,12 @@ ${agentJsonList}
     const briefToolsLine = (providerTools && providerTools.length > 0) ? '\nTools: ' + providerTools.map(t => t.name).join(', ') : '';
     promptsLogger.info(`\n\n=== AGENT BRIEF PROMPT: ${agent.name} (${agent.role}) ===\n` + JSON.stringify(messages, null, 2) + briefToolsLine);
 
-    const execOpts = { stream: false, onChunk: null, allowedToolNames: providerAllowedToolNames };
+    const execOpts = {
+      stream: false,
+      onChunk: null,
+      allowedToolNames: providerAllowedToolNames,
+      ...compactionOptions(session, agent.model_capabilities, agent.name, agent.context_tokens),
+    };
     if (agent.provider_config?.enablePromptCache) {
       execOpts.usePromptCache = true;
       execOpts.conversationId = conversationIdForCache(session.id, agent.id);
@@ -1284,6 +1306,9 @@ ${agentJsonList}
       extraToolHandlers = null,
       parallelToolNames = null,
       toolNoticeExclude = null,
+      contextWindowTokens = null,
+      compactPercent = null,
+      compactLabel = null,
     } = options;
     const maxIterations = 100; // Prevent infinite loops
     let iterations = 0;
@@ -1295,8 +1320,25 @@ ${agentJsonList}
     const parallelToolNameSet = Array.isArray(parallelToolNames) ? new Set(parallelToolNames) : null;
     const toolNoticeExcludeSet = Array.isArray(toolNoticeExclude) ? new Set(toolNoticeExclude) : null;
 
-    // Make a copy of messages to avoid mutating the original
-    const workingMessages = [...messages];
+    // Make a copy of messages to avoid mutating the original.
+    // If the prompt is over the session compacting limit, the same model
+    // summarizes first. The follow-up call keeps the system prompt and the new
+    // request, and does not add the context-window messages back.
+    let workingMessages = [...messages];
+    const compacted = await compactMessagesIfNeeded({
+      provider,
+      messages: workingMessages,
+      contextWindowTokens,
+      compactPercent,
+      label: compactLabel || 'agent',
+    });
+    workingMessages = compacted.messages;
+    totalTokensUsed += compacted.tokensUsed || 0;
+    totalInputTokens += compacted.inputTokens || 0;
+    totalOutputTokens += compacted.outputTokens || 0;
+    if (compacted.compacted && stream && onChunk) {
+      onChunk('\n[Context] Prior context was compacted to fit the model window.\n');
+    }
 
     while (iterations < maxIterations) {
       iterations++;

@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const crypto = require('crypto');
+const { isOrchestratorAgentId, isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 
 // Ensure storage directory exists
 const STORAGE_DIR = path.join(process.cwd(), 'storage', 'agents-dbs');
@@ -32,9 +33,10 @@ async function ensureStorageDir() {
  */
 function getDatabasePath(dbName, sessionId, agentId) {
   // Create a unique identifier: hash of sessionId + agentId + dbName
+  const entityId = agentId != null && !isOrchestratorAgentId(agentId) ? agentId : 'orchestrator';
   const uniqueId = crypto
     .createHash('sha256')
-    .update(`${sessionId}-${agentId}-${dbName}`)
+    .update(`${sessionId}-${entityId}-${dbName}`)
     .digest('hex')
     .substring(0, 16);
   
@@ -55,7 +57,7 @@ function getDatabasePath(dbName, sessionId, agentId) {
 function getDatabase(context) {
   const { sessionId, agentId } = context;
   
-  if (!sessionId || !agentId) {
+  if (!sessionId || agentId == null) {
     throw new Error('sessionId and agentId are required in context');
   }
 
@@ -213,16 +215,16 @@ function registerSqliteLocalDbTool() {
     handler: async (params, context) => {
       const { operation } = params;
       
-      if (!context.sessionId || !context.agentId) {
+      if (!context.sessionId || context.agentId == null) {
         throw new Error('sessionId and agentId are required in context');
       }
 
       // Get tool config from database
-      // Check orchestrator tools if agentId is not present, otherwise check agent tools
       const { dbAll } = require('../../../config/database');
       let toolAssignments;
-      
-      if (!context.agentId) {
+      const orchestrator = isOrchestratorContext(context);
+
+      if (orchestrator) {
         // Orchestrator tool config
         toolAssignments = await dbAll(
           `SELECT tool_config FROM session_orchestrator_tools 
@@ -239,7 +241,7 @@ function registerSqliteLocalDbTool() {
       }
 
       if (!toolAssignments || toolAssignments.length === 0) {
-        const entity = context.agentId ? 'agent' : 'orchestrator';
+        const entity = orchestrator ? 'orchestrator' : 'agent';
         throw new Error(`sqlite_local_db tool is not configured for this ${entity}. Please configure it in Session Settings → Tools.`);
       }
 
@@ -253,7 +255,7 @@ function registerSqliteLocalDbTool() {
       }
 
       if (!toolConfig || !toolConfig.database_name || toolConfig.database_name.trim() === '') {
-        const entity = context.agentId ? 'agent' : 'orchestrator';
+        const entity = orchestrator ? 'orchestrator' : 'agent';
         throw new Error(`Database name not configured for this ${entity}. Please configure the database name in Session Settings → Tools.`);
       }
 

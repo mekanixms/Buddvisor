@@ -10,6 +10,7 @@ const logger = require('../../utils/logger');
 const { dbAll } = require('../../../config/database');
 const WorkSession = require('../../models/WorkSession');
 const { getWorkspacePath, resolveWorkspacePath } = require('./localWorkingFolderTool');
+const { isOrchestratorContext, workspaceAgentId } = require('../../utils/orchestratorIdentity');
 const { terminalManager, TerminalManager } = require('./terminal/TerminalManager');
 const { TerminalLog, formatTerminalTranscript } = require('./terminal/TerminalLog');
 const { isInside } = require('./terminal/sandbox');
@@ -30,7 +31,7 @@ function assertSupportedPlatform() {
  * (same lookup and naming rules as workspace_exec).
  */
 async function resolveWorkspace(context) {
-  const isOrchestrator = !context.agentId;
+  const isOrchestrator = isOrchestratorContext(context);
   const rows = isOrchestrator
     ? await dbAll(
       'SELECT tool_config FROM session_orchestrator_tools WHERE session_id = ? AND tool_name = ?',
@@ -61,7 +62,7 @@ async function resolveWorkspace(context) {
   const workspacePath = getWorkspacePath(
     String(config.folder_name).trim(),
     context.sessionId,
-    context.agentId !== undefined ? context.agentId : null,
+    workspaceAgentId(context.agentId),
     config.randomize_name !== false
   );
   fs.mkdirSync(workspacePath, { recursive: true });

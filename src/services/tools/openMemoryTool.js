@@ -6,6 +6,7 @@
  */
 
 const { toolRegistry } = require('./ToolRegistry');
+const { isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 const logger = require('../../utils/logger');
 const https = require('https');
 const http = require('http');
@@ -64,10 +65,10 @@ async function ensureToolConfig(context) {
   }
 
   const { dbAll } = require('../../../config/database');
-  const agentId = context.agentId !== undefined ? context.agentId : null;
+  const orchestrator = isOrchestratorContext(context);
 
   let rows;
-  if (!agentId) {
+  if (orchestrator) {
     rows = await dbAll(
       `SELECT tool_config FROM session_orchestrator_tools
        WHERE session_id = ? AND tool_name = ?`,
@@ -82,7 +83,7 @@ async function ensureToolConfig(context) {
   }
 
   if (!rows || rows.length === 0) {
-    const entity = agentId ? 'agent' : 'orchestrator';
+    const entity = orchestrator ? 'orchestrator' : 'agent';
     throw new Error(`open_memory is not configured for this ${entity}. Set base_url in Session Settings → Tools.`);
   }
 
@@ -96,7 +97,7 @@ async function ensureToolConfig(context) {
   }
 
   if (!config || !config.base_url) {
-    const entity = agentId ? 'agent' : 'orchestrator';
+    const entity = orchestrator ? 'orchestrator' : 'agent';
     throw new Error(`open_memory requires base_url. Configure in Session Settings → Tools.`);
   }
 
@@ -118,9 +119,9 @@ function getDefaultUserId(context, config) {
   if (parts.length > 0) return parts.join(':');
 
   // Fallback when no config scopes are set (shouldn't happen with UI defaults)
-  const agentId = context.agentId !== undefined ? context.agentId : null;
   const sessionId = context.sessionId || '';
-  return agentId != null ? `session:${sessionId}:agent:${agentId}` : `session:${sessionId}:orchestrator`;
+  if (isOrchestratorContext(context)) return `session:${sessionId}:orchestrator`;
+  return `session:${sessionId}:agent:${context.agentId}`;
 }
 
 async function callOpenMemory(config, method, path, body = null) {

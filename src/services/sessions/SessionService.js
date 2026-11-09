@@ -6,6 +6,7 @@ const { syncSessionStorageLinks } = require('./SessionStorageLinks');
 const { toolRegistry } = require('../tools/ToolRegistry');
 const { encrypt, decrypt } = require('../../utils/crypto');
 const logger = require('../../utils/logger');
+const { parseOptionalContextTokens } = require('../chat/contextCompaction');
 const AgentService = require('../agents/AgentService');
 const LlamaCppProvider = require('../../providers/LlamaCppProvider');
 const {
@@ -136,6 +137,9 @@ class SessionService {
         name,
         description,
         context_length = 50,
+        context_compact_percent = 70,
+        context_tokens = null,
+        orchestrator_context_tokens = null,
         orchestrator_provider_type = 'claude',
         orchestrator_provider_config = {},
       } = sessionData;
@@ -161,6 +165,14 @@ class SessionService {
         throw new Error('Context length must be between 1 and 200');
       }
 
+      const compactPercent = parseInt(context_compact_percent, 10);
+      if (!Number.isFinite(compactPercent) || compactPercent < 1 || compactPercent > 100) {
+        throw new Error('Compacting limit must be between 1 and 100');
+      }
+
+      const contextTokens = parseOptionalContextTokens(context_tokens);
+      const orchestratorContextTokens = parseOptionalContextTokens(orchestrator_context_tokens);
+
       // Encrypt orchestrator config if it contains sensitive data
       let encryptedConfig = null;
       if (orchestrator_provider_type === 'llamacpp' && orchestrator_provider_config) {
@@ -175,6 +187,9 @@ class SessionService {
         name: name.trim(),
         description: description?.trim() || null,
         context_length,
+        context_compact_percent: compactPercent,
+        context_tokens: contextTokens,
+        orchestrator_context_tokens: orchestratorContextTokens,
         orchestrator_provider_type,
         orchestrator_provider_config: encryptedConfig,
         orchestrator_hf_model_repo: capabilityFields.orchestrator_hf_model_repo,
@@ -581,6 +596,22 @@ class SessionService {
           throw new Error('Context length must be between 1 and 200');
         }
         allowedUpdates.context_length = updates.context_length;
+      }
+
+      if (updates.context_compact_percent !== undefined) {
+        const compactPercent = parseInt(updates.context_compact_percent, 10);
+        if (!Number.isFinite(compactPercent) || compactPercent < 1 || compactPercent > 100) {
+          throw new Error('Compacting limit must be between 1 and 100');
+        }
+        allowedUpdates.context_compact_percent = compactPercent;
+      }
+
+      if (updates.context_tokens !== undefined) {
+        allowedUpdates.context_tokens = parseOptionalContextTokens(updates.context_tokens);
+      }
+
+      if (updates.orchestrator_context_tokens !== undefined) {
+        allowedUpdates.orchestrator_context_tokens = parseOptionalContextTokens(updates.orchestrator_context_tokens);
       }
 
       if (updates.orchestrator_provider_type !== undefined) {
@@ -1009,6 +1040,9 @@ class SessionService {
           name: session.name,
           description: session.description,
           context_length: session.context_length,
+          context_compact_percent: session.context_compact_percent ?? 70,
+          context_tokens: session.context_tokens ?? null,
+          orchestrator_context_tokens: session.orchestrator_context_tokens ?? null,
           orchestrator_provider_type: session.orchestrator_provider_type,
           orchestrator_provider_config: session.orchestrator_provider_config,
           orchestrator_hf_model_repo: session.orchestrator_hf_model_repo || null,
@@ -1026,6 +1060,8 @@ class SessionService {
           role: agent.role,
           initial_context: agent.initial_context,
           provider_type: agent.provider_type,
+          session_context: agent.session_context || null,
+          context_tokens: agent.context_tokens ?? null,
         })),
         documents: session.documents.map(doc => ({
           filename: doc.filename,
@@ -1103,6 +1139,9 @@ class SessionService {
         name: sessionName,
         description: importData.session.description,
         context_length: importData.session.context_length || 50,
+        context_compact_percent: importData.session.context_compact_percent ?? 70,
+        context_tokens: importData.session.context_tokens ?? null,
+        orchestrator_context_tokens: importData.session.orchestrator_context_tokens ?? null,
         orchestrator_provider_type: importData.session.orchestrator_provider_type || 'claude',
         orchestrator_provider_config: importData.session.orchestrator_provider_config || {},
         orchestrator_hf_model_repo: importData.session.orchestrator_hf_model_repo,
@@ -1135,6 +1174,7 @@ class SessionService {
 
       // Match and assign agents by name
       const agentIds = [];
+      const matchedAgents = [];
       if (importData.agents && importData.agents.length > 0) {
         const userAgents = await Agent.findByUserId(userId, { isActive: true });
         for (const exportedAgent of importData.agents) {
@@ -1147,6 +1187,7 @@ class SessionService {
           
           if (matchedAgent) {
             agentIds.push(matchedAgent.id);
+            matchedAgents.push({ id: matchedAgent.id, exported: exportedAgent });
             logger.info(`Matched agent: ${exportedAgent.name} -> ID ${matchedAgent.id}`);
           } else {
             logger.warn(`Agent not found: ${exportedAgent.name} (role: ${exportedAgent.role}, provider: ${exportedAgent.provider_type})`);
@@ -1155,6 +1196,18 @@ class SessionService {
         
         if (agentIds.length > 0) {
           await this.assignAgents(session.id, userId, agentIds);
+          for (const row of matchedAgents) {
+            if (row.exported.session_context != null && row.exported.session_context !== '') {
+              await WorkSession.setAgentSessionContext(session.id, row.id, row.exported.session_context);
+            }
+            if (row.exported.context_tokens != null) {
+              await WorkSession.setAgentContextTokens(
+                session.id,
+                row.id,
+                parseOptionalContextTokens(row.exported.context_tokens)
+              );
+            }
+          }
         }
       }
 
@@ -1322,6 +1375,9 @@ class SessionService {
         name: `${originalSession.name} (Copy)`,
         description: originalSession.description,
         context_length: originalSession.context_length,
+        context_compact_percent: originalSession.context_compact_percent ?? 70,
+        context_tokens: originalSession.context_tokens ?? null,
+        orchestrator_context_tokens: originalSession.orchestrator_context_tokens ?? null,
         orchestrator_provider_type: originalSession.orchestrator_provider_type,
         orchestrator_provider_config: originalSession.orchestrator_provider_config || {},
         orchestrator_hf_model_repo: originalSession.orchestrator_hf_model_repo || null,
@@ -1354,6 +1410,9 @@ class SessionService {
         for (const agent of originalSession.agents) {
           if (agent.session_context != null && agent.session_context !== '') {
             await WorkSession.setAgentSessionContext(newSession.id, agent.id, agent.session_context);
+          }
+          if (agent.context_tokens != null) {
+            await WorkSession.setAgentContextTokens(newSession.id, agent.id, agent.context_tokens);
           }
         }
       } else {

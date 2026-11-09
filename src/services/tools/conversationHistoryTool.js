@@ -10,6 +10,7 @@ const logger = require('../../utils/logger');
 const Message = require('../../models/Message');
 const { dbGet, dbAll } = require('../../../config/database');
 const { getWorkspacePath, resolveWorkspacePath } = require('./localWorkingFolderTool');
+const { isOrchestratorContext, workspaceAgentId } = require('../../utils/orchestratorIdentity');
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -188,11 +189,18 @@ function formatAsCSV(messages) {
  */
 async function getWorkingFolderConfig(sessionId, agentId) {
   try {
-    const toolAssignments = await dbAll(
-      `SELECT tool_config FROM session_agent_tools 
-       WHERE session_id = ? AND agent_id = ? AND tool_name = ?`,
-      [sessionId, agentId, 'local_working_folder']
-    );
+    const orchestrator = agentId == null || workspaceAgentId(agentId) == null;
+    const toolAssignments = orchestrator
+      ? await dbAll(
+        `SELECT tool_config FROM session_orchestrator_tools
+         WHERE session_id = ? AND tool_name = ?`,
+        [sessionId, 'local_working_folder']
+      )
+      : await dbAll(
+        `SELECT tool_config FROM session_agent_tools
+         WHERE session_id = ? AND agent_id = ? AND tool_name = ?`,
+        [sessionId, agentId, 'local_working_folder']
+      );
 
     if (!toolAssignments || toolAssignments.length === 0) {
       return null;
@@ -461,11 +469,14 @@ function registerConversationHistoryTool() {
       
       if (export_to_file) {
         // Validate that local_working_folder is configured
-        if (!context.agentId) {
+        if (context.agentId == null && !isOrchestratorContext(context)) {
           throw new Error('agentId is required in context for file export');
         }
-        
-        const workingFolderConfig = await getWorkingFolderConfig(context.sessionId, context.agentId);
+
+        const workingFolderConfig = await getWorkingFolderConfig(
+          context.sessionId,
+          isOrchestratorContext(context) ? null : context.agentId
+        );
         if (!workingFolderConfig) {
           throw new Error('local_working_folder tool must be configured to export to file. Please configure it in Session Settings → Tools.');
         }
@@ -474,7 +485,7 @@ function registerConversationHistoryTool() {
         const workspacePath = getWorkspacePath(
           workingFolderConfig.folder_name.trim(),
           context.sessionId,
-          context.agentId,
+          workspaceAgentId(context.agentId),
           workingFolderConfig.randomize_name !== false
         );
 

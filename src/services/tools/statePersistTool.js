@@ -164,7 +164,7 @@ function registerStatePersistTool() {
     handler: async (params, context) => {
       const { operation, key, value, ttl_ms } = params;
 
-      if (!context.sessionId || !context.agentId) {
+      if (!context.sessionId || context.agentId == null) {
         throw new Error('sessionId and agentId are required in context');
       }
 

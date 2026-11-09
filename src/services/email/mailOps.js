@@ -241,8 +241,10 @@ async function workspaceFor(context) {
   } = require('../tools/localWorkingFolderTool');
   const sessionId = Number(context && context.sessionId);
   if (!Number.isFinite(sessionId)) return null;
-  if (context.agentId == null) return getWorkspacePathForOrchestrator(sessionId);
-  return getWorkspacePathForSessionAgent(sessionId, Number(context.agentId));
+  const { workspaceAgentId } = require('../../utils/orchestratorIdentity');
+  const agentId = workspaceAgentId(context.agentId);
+  if (agentId == null) return getWorkspacePathForOrchestrator(sessionId);
+  return getWorkspacePathForSessionAgent(sessionId, Number(agentId));
 }
 
 async function uniqueName(directory, filename) {

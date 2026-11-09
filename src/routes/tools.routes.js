@@ -9,6 +9,23 @@ const { authenticate } = require('../middleware/auth');
 const { toolRegistry } = require('../services/tools/ToolRegistry');
 const { toolExecutor } = require('../services/tools/ToolExecutor');
 const logger = require('../utils/logger');
+const { orchestratorAgentId } = require('../utils/orchestratorIdentity');
+
+function apiToolContext(req) {
+  const sessionId = req.body.sessionId;
+  const context = {
+    userId: req.user.userId,
+    sessionId,
+    source: 'api',
+  };
+  if (req.body.agentId != null && req.body.agentId !== '') {
+    context.agentId = Number(req.body.agentId);
+  } else if (sessionId != null && sessionId !== '') {
+    context.agentId = orchestratorAgentId(sessionId);
+    context.isOrchestrator = true;
+  }
+  return context;
+}
 
 /**
  * Get the set of system-enabled tool names from ENABLED_TOOLS env var.
@@ -213,11 +230,7 @@ router.post('/:name/execute', authenticate, async (req, res) => {
     const { parameters = {} } = req.body;
 
     // Build execution context
-    const context = {
-      userId: req.user.userId,
-      sessionId: req.body.sessionId,
-      source: 'api',
-    };
+    const context = apiToolContext(req);
 
     const result = await toolExecutor.execute(name, parameters, context);
 
@@ -249,11 +262,7 @@ router.post('/execute-sequence', authenticate, async (req, res) => {
       });
     }
 
-    const context = {
-      userId: req.user.userId,
-      sessionId: req.body.sessionId,
-      source: 'api',
-    };
+    const context = apiToolContext(req);
 
     const results = await toolExecutor.executeSequence(toolCalls, context);
 
@@ -290,11 +299,7 @@ router.post('/execute-parallel', authenticate, async (req, res) => {
       });
     }
 
-    const context = {
-      userId: req.user.userId,
-      sessionId: req.body.sessionId,
-      source: 'api',
-    };
+    const context = apiToolContext(req);
 
     const results = await toolExecutor.executeParallel(toolCalls, context);
 

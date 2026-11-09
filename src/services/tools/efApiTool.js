@@ -9,6 +9,7 @@
  */
 
 const { toolRegistry } = require('./ToolRegistry');
+const { isOrchestratorAgentId, isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 const logger = require('../../utils/logger');
 const https = require('https');
 const http = require('http');
@@ -18,7 +19,9 @@ const tokenCache = new Map();
 const TOKEN_CACHE_TTL_MS = 55 * 60 * 1000; // 55 minutes (JWT often 1h)
 
 function getSessionAgentKey(sessionId, agentId) {
-  const entityId = agentId !== null && agentId !== undefined ? agentId : 'orchestrator';
+  const entityId = agentId !== null && agentId !== undefined && !isOrchestratorAgentId(agentId)
+    ? agentId
+    : 'orchestrator';
   return `${sessionId}:${entityId}`;
 }
 
@@ -135,10 +138,10 @@ async function ensureToolConfig(context) {
   }
 
   const { dbAll } = require('../../../config/database');
-  const agentId = context.agentId !== undefined ? context.agentId : null;
+  const orchestrator = isOrchestratorContext(context);
 
   let rows;
-  if (!agentId) {
+  if (orchestrator) {
     rows = await dbAll(
       `SELECT tool_config FROM session_orchestrator_tools
        WHERE session_id = ? AND tool_name = ?`,
@@ -153,7 +156,7 @@ async function ensureToolConfig(context) {
   }
 
   if (!rows || rows.length === 0) {
-    const entity = agentId ? 'agent' : 'orchestrator';
+    const entity = orchestrator ? 'orchestrator' : 'agent';
     throw new Error(`ef_api tool is not configured for this ${entity}. Configure base_url, username, and password in Session Settings → Tools.`);
   }
 
@@ -167,7 +170,7 @@ async function ensureToolConfig(context) {
   }
 
   if (!config || !config.base_url || !config.username || !config.password) {
-    const entity = agentId ? 'agent' : 'orchestrator';
+    const entity = orchestrator ? 'orchestrator' : 'agent';
     throw new Error(`ef_api requires base_url, username, and password. Configure in Session Settings → Tools.`);
   }
 

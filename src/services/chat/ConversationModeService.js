@@ -17,6 +17,7 @@ const logger = require('../../utils/logger');
 const promptsLogger = logger.promptsLogger;
 const { expandPromptMacros } = require('../../utils/promptMacros');
 const { usageFromResponse, tokenRow, mergeTokenRows } = require('./tokenUsage');
+const { compactionOptions } = require('./contextCompaction');
 
 class ConversationModeService {
   constructor() {
@@ -466,6 +467,7 @@ Guidelines:
         stream: !!onChunk,
         onChunk: onChunk ? (text) => onChunk({ agent: agent.name, chunk: text }) : null,
         allowedToolNames: providerAllowedToolNames,
+        ...compactionOptions(session, agent.model_capabilities, agent.name, agent.context_tokens),
       };
       try {
         const agentConfig = typeof agent.provider_config === 'string'

@@ -13,6 +13,14 @@ const { nextRunWhenEnabling } = require('../services/scheduler/SchedulerService'
 const { listTerminalSessionsForSession, getTerminalTranscript } = require('../services/tools/terminalTool');
 const { getPoolDumpForSession } = require('../services/tools/sessionPoolTool');
 const sessionStorageRoutes = require('./sessionStorage.routes');
+const { parseOptionalContextTokens } = require('../services/chat/contextCompaction');
+
+function optionalContextTokens(field) {
+  return body(field).optional({ nullable: true }).custom((value) => {
+    parseOptionalContextTokens(value === '' ? null : value);
+    return true;
+  });
+}
 
 // All session routes require authentication
 router.use(authenticate);
@@ -142,6 +150,12 @@ router.post('/', (req, res, next) => {
     .optional()
     .isInt({ min: 1, max: 200 })
     .withMessage('Context length must be between 1 and 200'),
+  body('context_compact_percent')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Compacting limit must be between 1 and 100'),
+  optionalContextTokens('context_tokens'),
+  optionalContextTokens('orchestrator_context_tokens'),
   body('orchestrator_provider_type')
     .optional()
     .isIn(['claude', 'openai', 'gemini', 'xai', 'deepseek', 'qwen', 'kimi', 'granite', 'ollama', 'llamacpp', 'openrouter'])
@@ -409,6 +423,12 @@ router.put('/:id', [
     .optional()
     .isInt({ min: 1, max: 200 })
     .withMessage('Context length must be between 1 and 200'),
+  body('context_compact_percent')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Compacting limit must be between 1 and 100'),
+  optionalContextTokens('context_tokens'),
+  optionalContextTokens('orchestrator_context_tokens'),
   body('orchestrator_provider_type')
     .optional()
     .isIn(['claude', 'openai', 'gemini', 'xai', 'deepseek', 'qwen', 'kimi', 'granite', 'ollama', 'llamacpp', 'openrouter'])
@@ -1015,14 +1035,14 @@ router.get('/:id/agents/:agentId/context', [
       req.userId
     );
 
-    const context = await WorkSession.getAgentSessionContext(
+    const settings = await WorkSession.getAgentSessionSettings(
       parseInt(req.params.id),
       parseInt(req.params.agentId)
     );
 
     res.json({
       success: true,
-      data: { context },
+      data: settings,
     });
   } catch (error) {
     if (error.message === 'Session not found' || error.message === 'Unauthorized access to session') {
@@ -1040,6 +1060,7 @@ router.put('/:id/agents/:agentId/context', [
   param('id').isInt().withMessage('Invalid session ID'),
   param('agentId').isInt().withMessage('Invalid agent ID'),
   body('context').optional({ nullable: true }).isString().withMessage('Context must be a string'),
+  optionalContextTokens('context_tokens'),
   validate
 ], async (req, res, next) => {
   try {
@@ -1049,11 +1070,22 @@ router.put('/:id/agents/:agentId/context', [
       req.userId
     );
 
-    await WorkSession.setAgentSessionContext(
-      parseInt(req.params.id),
-      parseInt(req.params.agentId),
-      req.body.context || null
-    );
+    const sessionId = parseInt(req.params.id);
+    const agentId = parseInt(req.params.agentId);
+    if (!Object.prototype.hasOwnProperty.call(req.body, 'context')
+      && !Object.prototype.hasOwnProperty.call(req.body, 'context_tokens')) {
+      return next(new AppError('Nothing to update', 400, 'VALIDATION_ERROR'));
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'context')) {
+      await WorkSession.setAgentSessionContext(sessionId, agentId, req.body.context || null);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'context_tokens')) {
+      await WorkSession.setAgentContextTokens(
+        sessionId,
+        agentId,
+        parseOptionalContextTokens(req.body.context_tokens)
+      );
+    }
 
     res.json({
       success: true,

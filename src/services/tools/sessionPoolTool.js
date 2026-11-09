@@ -7,6 +7,7 @@
 
 const { toolRegistry } = require('./ToolRegistry');
 const { dbAll } = require('../../../config/database');
+const { isOrchestratorAgentId, isOrchestratorContext, orchestratorAgentId } = require('../../utils/orchestratorIdentity');
 const logger = require('../../utils/logger');
 
 // In-memory storage: Map<sessionId, { version, changes, namespaces }>
@@ -143,19 +144,40 @@ async function getAssignedAgentIds(sessionId) {
     [sessionId, 'session_pool']
   );
 
-  return rows.map((row) => String(row.agent_id));
+  const ids = rows.map((row) => String(row.agent_id));
+  const orchestratorRows = await dbAll(
+    `SELECT 1 AS ok FROM session_orchestrator_tools
+     WHERE session_id = ? AND tool_name = ?
+     LIMIT 1`,
+    [sessionId, 'session_pool']
+  );
+  if (orchestratorRows && orchestratorRows.length > 0) {
+    const orchestratorId = String(orchestratorAgentId(sessionId));
+    if (!ids.includes(orchestratorId)) ids.push(orchestratorId);
+  }
+  return ids;
 }
 
 async function assertAgentAssigned(sessionId, agentId) {
-  const rows = await dbAll(
-    `SELECT 1 FROM session_agent_tools
-     WHERE session_id = ? AND agent_id = ? AND tool_name = ?
-     LIMIT 1`,
-    [sessionId, agentId, 'session_pool']
-  );
+  const orchestrator = isOrchestratorAgentId(agentId);
+  const rows = orchestrator
+    ? await dbAll(
+      `SELECT 1 AS ok FROM session_orchestrator_tools
+       WHERE session_id = ? AND tool_name = ?
+       LIMIT 1`,
+      [sessionId, 'session_pool']
+    )
+    : await dbAll(
+      `SELECT 1 FROM session_agent_tools
+       WHERE session_id = ? AND agent_id = ? AND tool_name = ?
+       LIMIT 1`,
+      [sessionId, agentId, 'session_pool']
+    );
 
   if (!rows || rows.length === 0) {
-    throw new Error('session_pool is not assigned to this agent');
+    throw new Error(orchestrator
+      ? 'session_pool is not assigned to the orchestrator'
+      : 'session_pool is not assigned to this agent');
   }
 }
 
@@ -404,8 +426,11 @@ function registerSessionPoolTool() {
     handler: async (params, context) => {
       const { operation, key, value, ttl_ms, owner_agent_id, since_version } = params;
 
-      if (!context.sessionId || !context.agentId) {
+      if (!context.sessionId || (context.agentId == null && !isOrchestratorContext(context))) {
         throw new Error('sessionId and agentId are required in context');
+      }
+      if (context.agentId == null && isOrchestratorContext(context)) {
+        context.agentId = orchestratorAgentId(context.sessionId);
       }
 
       const sessionId = String(context.sessionId);

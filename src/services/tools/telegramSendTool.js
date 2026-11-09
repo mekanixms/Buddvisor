@@ -17,6 +17,7 @@ const {
   resolveWorkspacePath,
 } = require('./localWorkingFolderTool');
 const TelegramService = require('../telegram/TelegramService');
+const { workspaceAgentId } = require('../../utils/orchestratorIdentity');
 const {
   formatBytes,
   mimeForFilename,
@@ -41,7 +42,7 @@ function toFileList(value) {
 }
 
 async function accessibleDocuments(sessionId, agentId) {
-  if (agentId != null && await Document.hasAgentAssignments(sessionId)) {
+  if (workspaceAgentId(agentId) != null && await Document.hasAgentAssignments(sessionId)) {
     return Document.getBySessionAndAgent(sessionId, agentId);
   }
   return Document.getBySession(sessionId);
@@ -135,8 +136,9 @@ async function resolveAndSend(sessionId, agentId, raw, caption) {
   const name = stripDecorations(raw);
   if (!name) return { success: false, error: 'Provide a file path or document filename.' };
 
-  const workspace = agentId != null
-    ? await getWorkspacePathForSessionAgent(Number(sessionId), Number(agentId))
+  const callerId = workspaceAgentId(agentId);
+  const workspace = callerId != null
+    ? await getWorkspacePathForSessionAgent(Number(sessionId), Number(callerId))
     : await getWorkspacePathForOrchestrator(Number(sessionId));
 
   if (workspace && !/[*?]/.test(name)) {

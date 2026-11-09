@@ -16,6 +16,7 @@ const OpenRouterProvider = require('../../providers/OpenRouterProvider');
 const logger = require('../../utils/logger');
 const { expandPromptMacros } = require('../../utils/promptMacros');
 const { usageFromResponse, tokenRow } = require('./tokenUsage');
+const { compactionOptions, compactMessagesIfNeeded } = require('./contextCompaction');
 
 const SUMMARY_MAX_MESSAGE_CHARS = 8000;
 const SUMMARY_MAX_TRANSCRIPT_CHARS = 120000;
@@ -634,11 +635,23 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
     const documentsSuffix = ContextManager.buildDocumentsSectionForOrchestrator(session) || '';
     const userMessageWithDocs = userMessage + documentsSuffix;
 
-    const messages = [
+    let messages = [
       { role: 'system', content: systemPrompt },
       ...context,
       { role: 'user', content: userMessageWithDocs },
     ];
+
+    const compactOpts = compactionOptions(session, session.orchestrator_model_capabilities, 'Orchestrator', session.orchestrator_context_tokens);
+    const compacted = await compactMessagesIfNeeded({
+      provider,
+      messages,
+      ...compactOpts,
+    });
+    messages = compacted.messages;
+    const compactTokens = compacted.tokensUsed || 0;
+    if (compacted.compacted && stream && onChunk) {
+      onChunk('\n[Context] Prior context was compacted to fit the model window.\n');
+    }
 
     const chatOpts = {};
     if (session.orchestrator_provider_config?.enablePromptCache) {
@@ -662,13 +675,13 @@ Provide clear, accurate responses. If you're unsure about something, say so.`, {
       }, chatOpts);
       return {
         content: fullContent,
-        tokensUsed: response?.usage?.total_tokens || 0,
+        tokensUsed: (response?.usage?.total_tokens || 0) + compactTokens,
       };
     } else {
       const response = await provider.chat(messages, chatOpts);
       return {
         content: response.content,
-        tokensUsed: response.usage?.total_tokens || 0,
+        tokensUsed: (response.usage?.total_tokens || 0) + compactTokens,
       };
     }
   }

@@ -7,6 +7,7 @@
 
 const { toolRegistry } = require('./ToolRegistry');
 const WorkSession = require('../../models/WorkSession');
+const { isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 const { resolveAgent, globToRegExp } = require('./agentDocumentsTool');
 const logger = require('../../utils/logger');
 
@@ -382,7 +383,7 @@ function registerAgentToolsTool() {
       if (!context.sessionId || !context.userId) {
         throw new Error('sessionId and userId are required in context');
       }
-      if (context.agentId != null) {
+      if (!isOrchestratorContext(context)) {
         return { success: false, error: `${TOOL_NAME} can only be used by the orchestrator, not by session agents.` };
       }
 

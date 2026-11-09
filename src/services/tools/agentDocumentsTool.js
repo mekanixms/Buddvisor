@@ -7,6 +7,7 @@
 
 const { toolRegistry } = require('./ToolRegistry');
 const WorkSession = require('../../models/WorkSession');
+const { isOrchestratorContext } = require('../../utils/orchestratorIdentity');
 const Document = require('../../models/Document');
 const logger = require('../../utils/logger');
 
@@ -362,7 +363,7 @@ function registerAgentDocumentsTool() {
       if (!context.sessionId || !context.userId) {
         throw new Error('sessionId and userId are required in context');
       }
-      if (context.agentId != null) {
+      if (!isOrchestratorContext(context)) {
         return { success: false, error: 'manage_agent_documents can only be used by the orchestrator, not by session agents.' };
       }
 
